@@ -1,0 +1,100 @@
+/**
+ * API client module with auth interceptors (T027).
+ */
+
+import axios from "axios";
+import type { AxiosError } from "axios";
+
+const api = axios.create({
+  baseURL: "/api/v1",
+  headers: {
+    "Content-Type": "application/json",
+  },
+});
+
+type ErrorPayload = {
+  detail?: string | Array<{ field?: string; message?: string }> | Record<string, unknown>;
+  errors?: Array<{ field?: string; message?: string }>;
+  error_id?: string;
+};
+
+function getStoredAccessToken(): string | null {
+  const fromSession = sessionStorage.getItem("access_token");
+  if (fromSession) {
+    return fromSession;
+  }
+
+  for (let i = 0; i < sessionStorage.length; i += 1) {
+    const key = sessionStorage.key(i);
+    if (!key || !key.startsWith("oidc.user:")) {
+      continue;
+    }
+
+    const raw = sessionStorage.getItem(key);
+    if (!raw) {
+      continue;
+    }
+
+    try {
+      const parsed = JSON.parse(raw) as { access_token?: string; token_type?: string };
+      if (parsed.access_token && parsed.token_type?.toLowerCase() !== "refresh_token") {
+        return parsed.access_token;
+      }
+    } catch {
+      // Ignore invalid storage values.
+    }
+  }
+
+  return null;
+}
+
+// Request interceptor - attach auth token
+api.interceptors.request.use((config) => {
+  const token = getStoredAccessToken();
+  if (token) {
+    config.headers.Authorization = `Bearer ${token}`;
+  }
+  return config;
+});
+
+// Response interceptor - handle 401
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      sessionStorage.removeItem("access_token");
+    }
+    return Promise.reject(error);
+  }
+);
+
+export function extractApiErrorMessage(error: unknown, fallback: string): string {
+  const axiosError = error as AxiosError<ErrorPayload>;
+  const status = axiosError.response?.status;
+  const data = axiosError.response?.data;
+
+  if (typeof data?.detail === "string" && data.detail.trim().length > 0) {
+    return data.error_id ? `${data.detail} (код: ${data.error_id})` : data.detail;
+  }
+
+  if (Array.isArray(data?.errors) && data.errors.length > 0) {
+    const first = data.errors[0];
+    if (first.message) {
+      return first.field ? `${first.field}: ${first.message}` : first.message;
+    }
+  }
+
+  if (status === 401) {
+    return "Сессия истекла. Авторизуйтесь повторно.";
+  }
+  if (status === 429) {
+    return "Слишком много запросов. Подождите несколько секунд и повторите.";
+  }
+  if (status === 500) {
+    return "Внутренняя ошибка сервера. Повторите попытку чуть позже.";
+  }
+
+  return fallback;
+}
+
+export default api;

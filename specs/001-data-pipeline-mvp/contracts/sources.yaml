@@ -1,0 +1,314 @@
+openapi: 3.0.3
+info:
+  title: GenDWH Sources API
+  version: 1.0.0
+  description: Source connection management endpoints
+
+servers:
+  - url: /api/v1
+
+paths:
+  /sources:
+    get:
+      summary: List sources
+      tags: [Sources]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, valid, invalid]
+      responses:
+        '200':
+          description: List of sources
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Source'
+                  total:
+                    type: integer
+
+    post:
+      summary: Create source connection
+      tags: [Sources]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceCreate'
+      responses:
+        '201':
+          description: Source created and validated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '400':
+          description: Connection failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionError'
+
+  /sources/{source_id}:
+    get:
+      summary: Get source details
+      tags: [Sources]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/SourceId'
+      responses:
+        '200':
+          description: Source details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '404':
+          description: Source not found
+
+    patch:
+      summary: Update source connection
+      tags: [Sources]
+      description: |
+        Updates source connection. If credentials change, re-validates connection
+        and pauses all related flows with status requiring re-verification.
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/SourceId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/SourceUpdate'
+      responses:
+        '200':
+          description: Source updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Source'
+        '400':
+          description: Connection validation failed
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionError'
+
+    delete:
+      summary: Delete source (soft delete)
+      tags: [Sources]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/SourceId'
+      responses:
+        '204':
+          description: Source deleted
+        '409':
+          description: Cannot delete - active flows exist
+
+  /sources/{source_id}/test:
+    post:
+      summary: Test source connection
+      tags: [Sources]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/SourceId'
+      responses:
+        '200':
+          description: Connection test result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ConnectionTestResult'
+
+  /sources/{source_id}/schemas:
+    get:
+      summary: List available schemas
+      tags: [Sources]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/SourceId'
+      responses:
+        '200':
+          description: List of schemas
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  schemas:
+                    type: array
+                    items:
+                      type: string
+
+  /sources/{source_id}/schemas/{schema_name}/tables:
+    get:
+      summary: List tables in schema
+      tags: [Sources]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/SourceId'
+        - name: schema_name
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: List of tables with columns
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tables:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/TableInfo'
+
+components:
+  parameters:
+    TenantHeader:
+      name: X-Tenant-ID
+      in: header
+      description: Tenant identifier (resolved from subdomain)
+      schema:
+        type: string
+      required: false
+
+    SourceId:
+      name: source_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Source:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        host:
+          type: string
+        port:
+          type: integer
+        database:
+          type: string
+        username:
+          type: string
+        connection_status:
+          type: string
+          enum: [pending, valid, invalid]
+        last_validated_at:
+          type: string
+          format: date-time
+        validation_error:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    SourceCreate:
+      type: object
+      required: [name, host, port, database, username, password]
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        host:
+          type: string
+        port:
+          type: integer
+          default: 5432
+        database:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    SourceUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        host:
+          type: string
+        port:
+          type: integer
+        database:
+          type: string
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    ConnectionTestResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        server_version:
+          type: string
+        latency_ms:
+          type: integer
+
+    ConnectionError:
+      type: object
+      properties:
+        error_code:
+          type: string
+          enum: [connection_refused, auth_failed, database_not_found, timeout, unknown]
+        message:
+          type: string
+        details:
+          type: object
+
+    TableInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        row_count:
+          type: integer
+        columns:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              data_type:
+                type: string
+              is_nullable:
+                type: boolean
+              is_primary_key:
+                type: boolean

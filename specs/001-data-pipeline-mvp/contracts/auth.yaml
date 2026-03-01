@@ -1,0 +1,165 @@
+openapi: 3.0.3
+info:
+  title: GenDWH Auth Contract
+  version: 1.0.0
+  description: |
+    Authentication and authorization contract for GenDWH.
+    Uses Keycloak OIDC for authentication with tenant-based isolation.
+
+servers:
+  - url: /api/v1
+
+paths:
+  /auth/me:
+    get:
+      summary: Get current user info
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Current user info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserInfo'
+        '401':
+          description: Unauthorized
+
+  /auth/tenant:
+    get:
+      summary: Get current tenant info
+      tags: [Auth]
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Tenant info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TenantInfo'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Keycloak OIDC JWT token.
+
+        Token must contain:
+        - sub: Keycloak user ID
+        - tenant_id: Tenant identifier (custom claim)
+        - realm_access.roles: User roles
+
+        Example token payload:
+        ```json
+        {
+          "sub": "550e8400-e29b-41d4-a716-446655440000",
+          "email": "user@example.com",
+          "tenant_id": "acme-corp",
+          "realm_access": {
+            "roles": ["user"]
+          },
+          "exp": 1709251200
+        }
+        ```
+
+  schemas:
+    UserInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+          description: Internal user ID
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum: [admin, user]
+          description: |
+            User role within tenant:
+            - admin: Full access, can see unmasked PII, view audit logs
+            - user: Standard access, masked preview, no audit access
+        tenant_id:
+          type: string
+          description: Tenant identifier
+        permissions:
+          type: array
+          items:
+            type: string
+            enum:
+              - sources:read
+              - sources:write
+              - flows:read
+              - flows:write
+              - flows:run
+              - preview:read
+              - schedules:read
+              - schedules:write
+              - audit:read
+              - pii:unmasked
+
+    TenantInfo:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        subdomain:
+          type: string
+        name:
+          type: string
+        is_active:
+          type: boolean
+        features:
+          type: object
+          properties:
+            max_sources:
+              type: integer
+            max_flows:
+              type: integer
+            max_concurrent_runs:
+              type: integer
+
+# Role-Permission Mapping
+x-role-permissions:
+  admin:
+    - sources:read
+    - sources:write
+    - flows:read
+    - flows:write
+    - flows:run
+    - preview:read
+    - schedules:read
+    - schedules:write
+    - audit:read
+    - pii:unmasked
+  user:
+    - sources:read
+    - sources:write
+    - flows:read
+    - flows:write
+    - flows:run
+    - preview:read
+    - schedules:read
+
+# Tenant Resolution
+x-tenant-resolution:
+  description: |
+    Tenant is resolved from request context using the following priority:
+    1. X-Tenant-ID header (if provided and user has access)
+    2. Subdomain from Host header (e.g., tenant1.app.com → tenant1)
+    3. tenant_id claim from JWT token
+
+  flow:
+    - Request arrives with Host: tenant1.app.com
+    - Extract subdomain: "tenant1"
+    - Validate JWT token from Authorization header
+    - Verify user's tenant_id claim matches subdomain
+    - Set tenant context for request duration
+    - All database queries use tenant schema

@@ -1,0 +1,224 @@
+services:
+  postgres-system:
+    image: postgres:15-alpine
+    container_name: gendwh-postgres-system
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    environment:
+      POSTGRES_DB: gendwh_system
+      POSTGRES_USER: gendwh
+      POSTGRES_PASSWORD: ${POSTGRES_SYSTEM_PASSWORD}
+    ports:
+      - "${POSTGRES_SYSTEM_HOST_PORT:-5432}:5432"
+    volumes:
+      - pgdata-system:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gendwh -d gendwh_system"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  postgres-business:
+    image: postgres:15-alpine
+    container_name: gendwh-postgres-business
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    environment:
+      POSTGRES_DB: gendwh_business
+      POSTGRES_USER: gendwh
+      POSTGRES_PASSWORD: ${POSTGRES_BUSINESS_PASSWORD}
+    ports:
+      - "${POSTGRES_BUSINESS_HOST_PORT:-15433}:5432"
+    volumes:
+      - pgdata-business:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gendwh -d gendwh_business"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: gendwh-redis
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.75
+    command: redis-server --requirepass ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: gendwh-keycloak
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    command: start-dev
+    environment:
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KC_HOSTNAME: ${KC_HOSTNAME:-localhost}
+      KC_HTTP_PORT: 8080
+    ports:
+      - "8080:8080"
+    volumes:
+      - keycloak-data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c \"exec 3<>/dev/tcp/localhost/8080 && printf 'GET /realms/master HTTP/1.1\\r\\nHost: localhost\\r\\n\\r\\n' >&3 && grep -q '200' <&3\""]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  keycloak-init:
+    image: quay.io/keycloak/keycloak:24.0
+    container_name: gendwh-keycloak-init
+    entrypoint: ["/bin/bash", "/opt/keycloak-init/keycloak-init.sh"]
+    environment:
+      KEYCLOAK_INTERNAL_URL: http://keycloak:8080
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-gendwh}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-gendwh-app}
+      KEYCLOAK_BOOTSTRAP_USER: ${KEYCLOAK_BOOTSTRAP_USER:-admin}
+      KEYCLOAK_BOOTSTRAP_PASSWORD: ${KEYCLOAK_BOOTSTRAP_PASSWORD:-}
+      KEYCLOAK_BOOTSTRAP_EMAIL: ${KEYCLOAK_BOOTSTRAP_EMAIL:-admin@gendwh.local}
+    volumes:
+      - ./keycloak-init.sh:/opt/keycloak-init/keycloak-init.sh:ro
+    depends_on:
+      keycloak:
+        condition: service_healthy
+    restart: "no"
+
+  backend-init:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: gendwh-backend-init
+    command: python scripts/bootstrap.py
+    env_file: .env
+    environment:
+      DATABASE_SYSTEM_URL: postgresql+asyncpg://gendwh:${POSTGRES_SYSTEM_PASSWORD}@postgres-system:5432/gendwh_system
+      DATABASE_BUSINESS_URL: postgresql+asyncpg://gendwh:${POSTGRES_BUSINESS_PASSWORD}@postgres-business:5432/gendwh_business
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/gendwh}
+    depends_on:
+      postgres-system:
+        condition: service_healthy
+      keycloak-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  backend:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: gendwh-backend
+    restart: unless-stopped
+    mem_limit: 768m
+    cpus: 1.0
+    env_file: .env
+    environment:
+      DATABASE_SYSTEM_URL: postgresql+asyncpg://gendwh:${POSTGRES_SYSTEM_PASSWORD}@postgres-system:5432/gendwh_system
+      DATABASE_BUSINESS_URL: postgresql+asyncpg://gendwh:${POSTGRES_BUSINESS_PASSWORD}@postgres-business:5432/gendwh_business
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/gendwh}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres-system:
+        condition: service_healthy
+      postgres-business:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "python -c \"import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health').status==200 else 1)\"",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  celery-worker:
+    build:
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+    container_name: gendwh-celery-worker
+    restart: unless-stopped
+    mem_limit: 1g
+    cpus: 1.0
+    command: celery -A src.core.celery_app worker --loglevel=info
+    env_file: .env
+    environment:
+      DATABASE_SYSTEM_URL: postgresql+asyncpg://gendwh:${POSTGRES_SYSTEM_PASSWORD}@postgres-system:5432/gendwh_system
+      DATABASE_BUSINESS_URL: postgresql+asyncpg://gendwh:${POSTGRES_BUSINESS_PASSWORD}@postgres-business:5432/gendwh_business
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+    depends_on:
+      postgres-system:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
+
+  celery-beat:
+    build:
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+    container_name: gendwh-celery-beat
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
+    command: celery -A src.core.celery_app beat --loglevel=info
+    env_file: .env
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend-init:
+        condition: service_completed_successfully
+
+  frontend:
+    build:
+      context: ../frontend
+      dockerfile: Dockerfile
+    container_name: gendwh-frontend
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    ports:
+      - "5173:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata-system:
+  pgdata-business:
+  redis-data:
+  keycloak-data:

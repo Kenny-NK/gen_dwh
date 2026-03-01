@@ -1,0 +1,36 @@
+version: 1
+send_anonymous_usage_stats: false
+project_id: gen-dwh
+
+default_environment: dev
+
+environments:
+  - name: dev
+  - name: staging
+  - name: prod
+
+plugins:
+  extractors:
+    - name: tap-postgres
+      variant: meltanolabs
+      pip_url: meltanolabs-tap-postgres
+      config:
+        host: ${TAP_POSTGRES_HOST}
+        port: ${TAP_POSTGRES_PORT}
+        user: ${TAP_POSTGRES_USER}
+        password: ${TAP_POSTGRES_PASSWORD}
+        database: ${TAP_POSTGRES_DATABASE}
+        default_replication_method: INCREMENTAL
+
+  loaders:
+    - name: target-postgres
+      variant: meltanolabs
+      pip_url: meltanolabs-target-postgres
+      config:
+        host: ${TARGET_POSTGRES_HOST}
+        port: ${TARGET_POSTGRES_PORT}
+        user: ${TARGET_POSTGRES_USER}
+        password: ${TARGET_POSTGRES_PASSWORD}
+        database: ${TARGET_POSTGRES_DATABASE}
+        default_target_schema: ${TARGET_POSTGRES_SCHEMA}
+        add_record_metadata: true

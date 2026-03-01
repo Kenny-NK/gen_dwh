@@ -1,0 +1,240 @@
+openapi: 3.0.3
+info:
+  title: GenDWH Schedules API
+  version: 1.0.0
+  description: Schedule configuration endpoints
+
+servers:
+  - url: /api/v1
+
+paths:
+  /flows/{flow_id}/schedule:
+    get:
+      summary: Get flow schedule
+      tags: [Schedules]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      responses:
+        '200':
+          description: Schedule configuration
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+        '404':
+          description: No schedule configured
+
+    put:
+      summary: Create or update schedule
+      tags: [Schedules]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ScheduleConfig'
+      responses:
+        '200':
+          description: Schedule updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Schedule'
+
+    delete:
+      summary: Delete schedule (set to manual)
+      tags: [Schedules]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      responses:
+        '204':
+          description: Schedule removed (flow set to manual)
+
+  /flows/{flow_id}/schedule/validate:
+    post:
+      summary: Validate cron expression
+      tags: [Schedules]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                cron_expression:
+                  type: string
+                timezone:
+                  type: string
+      responses:
+        '200':
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+                  error:
+                    type: string
+                  next_runs:
+                    type: array
+                    items:
+                      type: string
+                      format: date-time
+                    description: Next 5 scheduled run times
+
+  /schedules:
+    get:
+      summary: List all schedules
+      tags: [Schedules]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - name: is_active
+          in: query
+          schema:
+            type: boolean
+        - name: upcoming_within_hours
+          in: query
+          schema:
+            type: integer
+          description: Filter schedules with next_run within N hours
+      responses:
+        '200':
+          description: List of schedules
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/ScheduleSummary'
+
+components:
+  parameters:
+    TenantHeader:
+      name: X-Tenant-ID
+      in: header
+      schema:
+        type: string
+
+    FlowId:
+      name: flow_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Schedule:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        flow_id:
+          type: string
+          format: uuid
+        flow_name:
+          type: string
+        schedule_type:
+          type: string
+          enum: [cron, interval, manual]
+        cron_expression:
+          type: string
+          description: Cron expression (if type=cron)
+        interval_minutes:
+          type: integer
+          description: Interval in minutes (if type=interval)
+        timezone:
+          type: string
+          default: Europe/Moscow
+        max_retries:
+          type: integer
+          default: 5
+        timeout_minutes:
+          type: integer
+          default: 120
+        is_active:
+          type: boolean
+        last_run_at:
+          type: string
+          format: date-time
+        next_run_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    ScheduleConfig:
+      type: object
+      required: [schedule_type]
+      properties:
+        schedule_type:
+          type: string
+          enum: [cron, interval, manual]
+        cron_expression:
+          type: string
+          description: Required if schedule_type=cron
+        interval_minutes:
+          type: integer
+          minimum: 5
+          maximum: 10080
+          description: Required if schedule_type=interval (5 min to 7 days)
+        timezone:
+          type: string
+          default: Europe/Moscow
+        max_retries:
+          type: integer
+          minimum: 0
+          maximum: 10
+          default: 5
+        timeout_minutes:
+          type: integer
+          minimum: 1
+          maximum: 1440
+          default: 120
+        is_active:
+          type: boolean
+          default: true
+
+    ScheduleSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        flow_id:
+          type: string
+          format: uuid
+        flow_name:
+          type: string
+        schedule_type:
+          type: string
+          enum: [cron, interval, manual]
+        schedule_description:
+          type: string
+          description: Human-readable schedule (e.g., "Every 6 hours")
+        timezone:
+          type: string
+        is_active:
+          type: boolean
+        next_run_at:
+          type: string
+          format: date-time
+        last_run_status:
+          type: string

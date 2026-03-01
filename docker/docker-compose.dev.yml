@@ -1,0 +1,16 @@
+services:
+  postgres-system:
+    ports:
+      - "5432:5432"
+
+  postgres-business:
+    ports:
+      - "5433:5432"
+
+  redis:
+    ports:
+      - "6379:6379"
+
+  keycloak:
+    ports:
+      - "8080:8080"

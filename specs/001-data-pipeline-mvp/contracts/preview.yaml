@@ -1,0 +1,264 @@
+openapi: 3.0.3
+info:
+  title: GenDWH Preview API
+  version: 1.0.0
+  description: Data preview endpoints with masking support
+
+servers:
+  - url: /api/v1
+
+paths:
+  /flows/{flow_id}/preview:
+    post:
+      summary: Start preview execution
+      tags: [Preview]
+      description: |
+        Executes a preview run using Meltano dry-run mode.
+        Results stored in temporary preview schema with 1 hour TTL.
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PreviewRequest'
+      responses:
+        '202':
+          description: Preview started
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewSession'
+
+  /flows/{flow_id}/preview/{session_id}:
+    get:
+      summary: Get preview status
+      tags: [Preview]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '200':
+          description: Preview session status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewSession'
+
+  /flows/{flow_id}/preview/{session_id}/data:
+    get:
+      summary: Get preview data
+      tags: [Preview]
+      description: |
+        Returns preview data with masking applied for non-admin users.
+        Supports pagination, sorting, and filtering.
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+        - $ref: '#/components/parameters/SessionId'
+        - name: table
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Table name to preview
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: page_size
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 100
+        - name: sort_by
+          in: query
+          schema:
+            type: string
+        - name: sort_order
+          in: query
+          schema:
+            type: string
+            enum: [asc, desc]
+            default: asc
+        - name: filter
+          in: query
+          schema:
+            type: string
+          description: SQL-like filter expression (e.g., "status = 'active'")
+      responses:
+        '200':
+          description: Preview data
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewData'
+        '404':
+          description: Session expired or table not found
+
+  /flows/{flow_id}/preview/{session_id}/schema:
+    get:
+      summary: Get preview schema
+      tags: [Preview]
+      description: Returns column information including sensitivity markers
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+        - $ref: '#/components/parameters/SessionId'
+        - name: table
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Table schema with sensitivity info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PreviewSchema'
+
+components:
+  parameters:
+    TenantHeader:
+      name: X-Tenant-ID
+      in: header
+      schema:
+        type: string
+
+    FlowId:
+      name: flow_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    PreviewRequest:
+      type: object
+      properties:
+        row_limit:
+          type: integer
+          default: 100
+          minimum: 1
+          maximum: 10000
+          description: Maximum rows to extract per table
+        tables:
+          type: array
+          items:
+            type: string
+          description: Specific tables to preview (empty = all tables)
+
+    PreviewSession:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        flow_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [pending, running, completed, failed, expired]
+        row_limit:
+          type: integer
+        total_rows:
+          type: integer
+        tables_available:
+          type: array
+          items:
+            type: string
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        error_message:
+          type: string
+
+    PreviewData:
+      type: object
+      properties:
+        session_id:
+          type: string
+          format: uuid
+        table:
+          type: string
+        columns:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              data_type:
+                type: string
+              is_masked:
+                type: boolean
+              sensitivity_type:
+                type: string
+        rows:
+          type: array
+          items:
+            type: object
+        pagination:
+          type: object
+          properties:
+            page:
+              type: integer
+            page_size:
+              type: integer
+            total_rows:
+              type: integer
+            total_pages:
+              type: integer
+        masking_applied:
+          type: boolean
+          description: True if any columns were masked (User role)
+
+    PreviewSchema:
+      type: object
+      properties:
+        table:
+          type: string
+        columns:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              data_type:
+                type: string
+              is_nullable:
+                type: boolean
+              is_primary_key:
+                type: boolean
+              is_masked:
+                type: boolean
+              sensitivity_type:
+                type: string
+                enum: [pii_email, pii_phone, pii_credit_card, pii_passport, sensitive, null]
+              sample_values:
+                type: array
+                items:
+                  type: string
+                maxItems: 5

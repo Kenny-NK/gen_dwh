@@ -1,0 +1,443 @@
+openapi: 3.0.3
+info:
+  title: GenDWH Flows API
+  version: 1.0.0
+  description: Data flow management endpoints
+
+servers:
+  - url: /api/v1
+
+paths:
+  /flows:
+    get:
+      summary: List flows
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [draft, paused, running, success, failed]
+        - name: source_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: List of flows
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FlowSummary'
+                  total:
+                    type: integer
+
+    post:
+      summary: Create flow (draft)
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlowCreate'
+      responses:
+        '201':
+          description: Flow created in draft status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+
+  /flows/{flow_id}:
+    get:
+      summary: Get flow details
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      responses:
+        '200':
+          description: Flow details with tables
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+
+    patch:
+      summary: Update flow configuration
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlowUpdate'
+      responses:
+        '200':
+          description: Flow updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+
+    delete:
+      summary: Delete flow (soft delete)
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      responses:
+        '204':
+          description: Flow deleted
+
+  /flows/{flow_id}/activate:
+    post:
+      summary: Activate flow (draft → paused)
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      responses:
+        '200':
+          description: Flow activated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+
+  /flows/{flow_id}/pause:
+    post:
+      summary: Pause flow (any → paused)
+      tags: [Flows]
+      description: Pauses flow. If running, waits for current run to complete.
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      responses:
+        '200':
+          description: Flow paused
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Flow'
+
+  /flows/{flow_id}/tables:
+    get:
+      summary: List flow tables
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      responses:
+        '200':
+          description: List of table configurations
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/FlowTable'
+
+    post:
+      summary: Add table to flow
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlowTableCreate'
+      responses:
+        '201':
+          description: Table added
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlowTable'
+
+  /flows/{flow_id}/tables/{table_id}:
+    patch:
+      summary: Update table configuration
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+        - name: table_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FlowTableUpdate'
+      responses:
+        '200':
+          description: Table updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FlowTable'
+
+    delete:
+      summary: Remove table from flow
+      tags: [Flows]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+        - name: table_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '204':
+          description: Table removed
+
+components:
+  parameters:
+    TenantHeader:
+      name: X-Tenant-ID
+      in: header
+      schema:
+        type: string
+
+    FlowId:
+      name: flow_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    FlowSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        source_id:
+          type: string
+          format: uuid
+        source_name:
+          type: string
+        status:
+          type: string
+          enum: [draft, paused, running, success, failed]
+        status_reason:
+          type: string
+        tables_count:
+          type: integer
+        last_run_at:
+          type: string
+          format: date-time
+        last_run_status:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+
+    Flow:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        description:
+          type: string
+        source_id:
+          type: string
+          format: uuid
+        source:
+          $ref: '#/components/schemas/SourceRef'
+        status:
+          type: string
+          enum: [draft, paused, running, success, failed]
+        status_reason:
+          type: string
+        target_schema:
+          type: string
+        target_table_prefix:
+          type: string
+        write_mode:
+          type: string
+          enum: [append, upsert, replace]
+        upsert_key:
+          type: string
+        tables:
+          type: array
+          items:
+            $ref: '#/components/schemas/FlowTable'
+        schedule:
+          $ref: '#/components/schemas/ScheduleRef'
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    FlowCreate:
+      type: object
+      required: [name, source_id, target_schema]
+      properties:
+        name:
+          type: string
+          maxLength: 255
+        description:
+          type: string
+        source_id:
+          type: string
+          format: uuid
+        target_schema:
+          type: string
+          pattern: '^[a-z][a-z0-9_]*$'
+        target_table_prefix:
+          type: string
+        write_mode:
+          type: string
+          enum: [append, upsert, replace]
+          default: append
+        upsert_key:
+          type: string
+
+    FlowUpdate:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        target_schema:
+          type: string
+        target_table_prefix:
+          type: string
+        write_mode:
+          type: string
+          enum: [append, upsert, replace]
+        upsert_key:
+          type: string
+
+    FlowTable:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        source_schema:
+          type: string
+        source_table:
+          type: string
+        target_table:
+          type: string
+        replication_method:
+          type: string
+          enum: [FULL_TABLE, INCREMENTAL]
+        replication_key:
+          type: string
+        selected_columns:
+          type: array
+          items:
+            type: string
+        sensitive_columns:
+          type: object
+          additionalProperties:
+            type: string
+        last_cursor_value:
+          type: string
+
+    FlowTableCreate:
+      type: object
+      required: [source_schema, source_table]
+      properties:
+        source_schema:
+          type: string
+        source_table:
+          type: string
+        target_table:
+          type: string
+        replication_method:
+          type: string
+          enum: [FULL_TABLE, INCREMENTAL]
+          default: FULL_TABLE
+        replication_key:
+          type: string
+        selected_columns:
+          type: array
+          items:
+            type: string
+        sensitive_columns:
+          type: object
+          additionalProperties:
+            type: string
+
+    FlowTableUpdate:
+      type: object
+      properties:
+        target_table:
+          type: string
+        replication_method:
+          type: string
+          enum: [FULL_TABLE, INCREMENTAL]
+        replication_key:
+          type: string
+        selected_columns:
+          type: array
+          items:
+            type: string
+        sensitive_columns:
+          type: object
+          additionalProperties:
+            type: string
+
+    SourceRef:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        connection_status:
+          type: string
+
+    ScheduleRef:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        schedule_type:
+          type: string
+          enum: [cron, interval, manual]
+        is_active:
+          type: boolean
+        next_run_at:
+          type: string
+          format: date-time

@@ -1,0 +1,46 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+dist/
+*.egg-info/
+.eggs/
+*.egg
+
+# Node.js
+node_modules/
+dist/
+build/
+
+# Environment
+.env
+.env.*
+!.env.example
+docker/.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+coverage/
+
+# Meltano
+.meltano/
+
+# Logs
+*.log
+
+# Build artifacts
+*.tmp

@@ -1,0 +1,288 @@
+openapi: 3.0.3
+info:
+  title: GenDWH Runs API
+  version: 1.0.0
+  description: Run execution and history endpoints
+
+servers:
+  - url: /api/v1
+
+paths:
+  /flows/{flow_id}/runs:
+    get:
+      summary: List flow runs
+      tags: [Runs]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, running, success, failed, cancelled]
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: to_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 50
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        '200':
+          description: List of runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Run'
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+
+    post:
+      summary: Trigger manual run
+      tags: [Runs]
+      description: |
+        Triggers a manual run. Returns 409 if a run for the same table is already in progress.
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+      responses:
+        '202':
+          description: Run triggered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '409':
+          description: Run already in progress for this flow
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+  /flows/{flow_id}/runs/{run_id}:
+    get:
+      summary: Get run details
+      tags: [Runs]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run details
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RunDetail'
+
+  /flows/{flow_id}/runs/{run_id}/cancel:
+    post:
+      summary: Cancel running task
+      tags: [Runs]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '200':
+          description: Run cancelled
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          description: Run not in running status
+
+  /flows/{flow_id}/runs/{run_id}/retry:
+    post:
+      summary: Retry failed run
+      tags: [Runs]
+      description: Retries a failed run. Resets retry counter.
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - $ref: '#/components/parameters/FlowId'
+        - $ref: '#/components/parameters/RunId'
+      responses:
+        '202':
+          description: Retry triggered
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Run'
+        '400':
+          description: Run not in failed status
+
+  /runs:
+    get:
+      summary: List all runs (across flows)
+      tags: [Runs]
+      parameters:
+        - $ref: '#/components/parameters/TenantHeader'
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [pending, running, success, failed, cancelled]
+        - name: from_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        '200':
+          description: List of runs
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  items:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RunSummary'
+
+components:
+  parameters:
+    TenantHeader:
+      name: X-Tenant-ID
+      in: header
+      schema:
+        type: string
+
+    FlowId:
+      name: flow_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+    RunId:
+      name: run_id
+      in: path
+      required: true
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    Run:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        flow_id:
+          type: string
+          format: uuid
+        flow_name:
+          type: string
+        run_number:
+          type: integer
+        triggered_by:
+          type: string
+          enum: [manual, scheduled, retry]
+        status:
+          type: string
+          enum: [pending, running, success, failed, cancelled]
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        duration_seconds:
+          type: integer
+        records_processed:
+          type: integer
+        error_message:
+          type: string
+        retry_count:
+          type: integer
+
+    RunDetail:
+      allOf:
+        - $ref: '#/components/schemas/Run'
+        - type: object
+          properties:
+            tables_processed:
+              type: integer
+            records_failed:
+              type: integer
+            error_details:
+              type: object
+              properties:
+                error_code:
+                  type: string
+                table:
+                  type: string
+                message:
+                  type: string
+                stack_trace:
+                  type: string
+            table_stats:
+              type: array
+              items:
+                type: object
+                properties:
+                  table_name:
+                    type: string
+                  records_extracted:
+                    type: integer
+                  records_loaded:
+                    type: integer
+                  duration_seconds:
+                    type: integer
+
+    RunSummary:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        flow_id:
+          type: string
+          format: uuid
+        flow_name:
+          type: string
+        status:
+          type: string
+          enum: [pending, running, success, failed, cancelled]
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        records_processed:
+          type: integer
+
+    Error:
+      type: object
+      properties:
+        error_code:
+          type: string
+        message:
+          type: string
