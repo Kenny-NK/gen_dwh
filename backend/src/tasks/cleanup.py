@@ -2,18 +2,29 @@
 
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete, text
+from sqlalchemy import delete
 
 from src.core.celery_app import celery_app
 from src.models.base import SystemSessionLocal
 
 
+def _run_async_task(coro) -> None:
+    import asyncio
+
+    loop = asyncio.new_event_loop()
+    try:
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(coro)
+    finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
+        asyncio.set_event_loop(None)
+        loop.close()
+
+
 @celery_app.task
 def cleanup_expired_previews():
     """Remove expired preview schemas."""
-    import asyncio
-
-    asyncio.run(_cleanup_previews())
+    _run_async_task(_cleanup_previews())
 
 
 async def _cleanup_previews():
@@ -32,9 +43,7 @@ async def _cleanup_previews():
 @celery_app.task
 def cleanup_old_audit_events():
     """Remove audit events older than 100 days."""
-    import asyncio
-
-    asyncio.run(_cleanup_audit())
+    _run_async_task(_cleanup_audit())
 
 
 async def _cleanup_audit():

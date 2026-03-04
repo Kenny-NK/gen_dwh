@@ -7,6 +7,7 @@ import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api, { extractApiErrorMessage } from "../../services/api";
 import { Button } from "../../components/common/Button";
+import { Modal } from "../../components/common/Modal";
 import { Preview } from "../../components/Preview/Preview";
 import { useToast } from "../../components/common/Toast";
 
@@ -25,6 +26,7 @@ interface FlowTableData {
   id: string;
   source_schema: string;
   source_table: string;
+  target_table: string;
   replication_method: string;
   replication_key: string | null;
 }
@@ -61,6 +63,10 @@ export default function FlowDetail() {
   const [previewSession, setPreviewSession] = useState<string | null>(null);
   const [selectedSchema, setSelectedSchema] = useState("");
   const [selectedSourceTable, setSelectedSourceTable] = useState("");
+  const [deleteFlowOpen, setDeleteFlowOpen] = useState(false);
+  const [dropFlowTargetTables, setDropFlowTargetTables] = useState(false);
+  const [tableToDelete, setTableToDelete] = useState<FlowTableData | null>(null);
+  const [dropSingleTargetTable, setDropSingleTargetTable] = useState(false);
   const selectedTableKey = selectedSchema && selectedSourceTable ? `${selectedSchema}.${selectedSourceTable}` : "";
 
   const { data: flow, isLoading } = useQuery<FlowData>({
@@ -169,6 +175,39 @@ export default function FlowDetail() {
     },
   });
 
+  const removeTableMutation = useMutation({
+    mutationFn: (payload: { tableId: string; dropTargetTable: boolean }) =>
+      api.delete(`/flows/${id}/tables/${payload.tableId}`, {
+        params: { drop_target_table: payload.dropTargetTable },
+      }),
+    onSuccess: () => {
+      addToast("success", "Таблица удалена из потока");
+      queryClient.invalidateQueries({ queryKey: ["flow-tables", id] });
+      setTableToDelete(null);
+      setDropSingleTargetTable(false);
+    },
+    onError: (error: unknown) => {
+      addToast("error", extractApiErrorMessage(error, "Не удалось удалить таблицу"));
+    },
+  });
+
+  const deleteFlowMutation = useMutation({
+    mutationFn: (dropTargetTables: boolean) =>
+      api.delete(`/flows/${id}`, {
+        params: { drop_target_tables: dropTargetTables },
+      }),
+    onSuccess: () => {
+      addToast("success", "Поток удален");
+      queryClient.invalidateQueries({ queryKey: ["flows"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-flows"] });
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      navigate("/flows");
+    },
+    onError: (error: unknown) => {
+      addToast("error", extractApiErrorMessage(error, "Не удалось удалить поток"));
+    },
+  });
+
   if (isLoading) return <div>Загрузка...</div>;
   if (!flow) return <div>Поток не найден</div>;
 
@@ -207,6 +246,16 @@ export default function FlowDetail() {
           </Button>
           <Button variant="secondary" onClick={() => navigate(`/flows/${id}/runs`)}>
             История запусков
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              setDeleteFlowOpen(true);
+              setDropFlowTargetTables(false);
+            }}
+            disabled={flow.status === "running"}
+          >
+            Удалить поток
           </Button>
         </div>
       </div>
@@ -279,8 +328,24 @@ export default function FlowDetail() {
               {t.source_schema}.{t.source_table}
             </div>
             <div className="text-sm text-slate-500 dark:text-slate-400">
+              Целевая таблица: {flow.target_schema}.{t.target_table}
+            </div>
+            <div className="text-sm text-slate-500 dark:text-slate-400">
               Метод: {t.replication_method}
               {Boolean(t.replication_key) && ` | Курсор: ${t.replication_key}`}
+            </div>
+            <div className="mt-2">
+              <Button
+                variant="danger"
+                size="sm"
+                onClick={() => {
+                  setTableToDelete(t);
+                  setDropSingleTargetTable(false);
+                }}
+                disabled={flow.status === "running"}
+              >
+                Удалить таблицу из потока
+              </Button>
             </div>
           </div>
         ))}
@@ -300,6 +365,104 @@ export default function FlowDetail() {
           />
         </div>
       )}
+
+      <Modal
+        isOpen={deleteFlowOpen}
+        onClose={() => {
+          if (deleteFlowMutation.isPending) return;
+          setDeleteFlowOpen(false);
+          setDropFlowTargetTables(false);
+        }}
+        title="Удаление потока"
+      >
+        <p className="mb-4 text-sm text-slate-700 dark:text-slate-300">
+          Вы уверены, что хотите удалить поток <strong>{flow.name}</strong>?
+        </p>
+        <p className="mb-4 text-xs text-amber-700 dark:text-amber-300">
+          Внимание: действие необратимо. Поток и привязанные таблицы будут удалены из конфигурации.
+        </p>
+        <label className="mb-4 flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <input
+            type="checkbox"
+            checked={dropFlowTargetTables}
+            onChange={(e) => setDropFlowTargetTables(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>Также удалить все целевые таблицы этого потока из business DB</span>
+        </label>
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setDeleteFlowOpen(false);
+              setDropFlowTargetTables(false);
+            }}
+            disabled={deleteFlowMutation.isPending}
+          >
+            Отмена
+          </Button>
+          <Button
+            variant="danger"
+            loading={deleteFlowMutation.isPending}
+            onClick={() => deleteFlowMutation.mutate(dropFlowTargetTables)}
+          >
+            Удалить поток
+          </Button>
+        </div>
+      </Modal>
+
+      <Modal
+        isOpen={tableToDelete !== null}
+        onClose={() => {
+          if (removeTableMutation.isPending) return;
+          setTableToDelete(null);
+          setDropSingleTargetTable(false);
+        }}
+        title="Удаление таблицы из потока"
+      >
+        <p className="mb-4 text-sm text-slate-700 dark:text-slate-300">
+          Удалить таблицу <strong>{tableToDelete?.source_schema}.{tableToDelete?.source_table}</strong> из потока?
+        </p>
+        <p className="mb-4 text-xs text-amber-700 dark:text-amber-300">
+          Внимание: при удалении таблицы из потока новые загрузки по ней выполняться не будут.
+        </p>
+        <label className="mb-4 flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <input
+            type="checkbox"
+            checked={dropSingleTargetTable}
+            onChange={(e) => setDropSingleTargetTable(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>
+            Также удалить физическую таблицу {flow.target_schema}.{tableToDelete?.target_table} из business DB
+          </span>
+        </label>
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setTableToDelete(null);
+              setDropSingleTargetTable(false);
+            }}
+            disabled={removeTableMutation.isPending}
+          >
+            Отмена
+          </Button>
+          <Button
+            variant="danger"
+            loading={removeTableMutation.isPending}
+            onClick={() =>
+              tableToDelete &&
+              removeTableMutation.mutate({
+                tableId: tableToDelete.id,
+                dropTargetTable: dropSingleTargetTable,
+              })
+            }
+          >
+            Удалить
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -1,14 +1,71 @@
 """/auth/me endpoint (T022)."""
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.deps import get_tenant_db
-from src.core.permissions import get_permissions_for_role
+from src.core.config import settings
 from src.core.tenant import get_current_tenant_id
+from src.core.security import KeycloakUnavailableError, decode_jwt
 from src.middleware.auth import get_current_user
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+security = HTTPBearer(auto_error=False)
+
+
+def _set_auth_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=settings.auth_cookie_name,
+        value=token,
+        httponly=True,
+        secure=settings.auth_cookie_secure,
+        samesite=settings.auth_cookie_samesite.lower(),
+        max_age=settings.auth_cookie_max_age_seconds,
+        path="/",
+    )
+
+
+@router.post("/session")
+async def create_session(
+    response: Response,
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> dict:
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Не авторизован",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    token = credentials.credentials
+    try:
+        await decode_jwt(token)
+    except KeycloakUnavailableError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Сервис авторизации временно недоступен",
+        )
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Недействительный или просроченный токен",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    _set_auth_cookie(response, token)
+    return {"status": "ok"}
+
+
+@router.delete("/session")
+async def clear_session(response: Response) -> dict:
+    response.delete_cookie(
+        key=settings.auth_cookie_name,
+        path="/",
+        secure=settings.auth_cookie_secure,
+        samesite=settings.auth_cookie_samesite.lower(),
+    )
+    return {"status": "ok"}
 
 
 @router.get("/me")
@@ -18,12 +75,12 @@ async def get_me(
 ) -> dict:
     """Get current user information."""
     _ = db
-    permissions = [str(p) for p in get_permissions_for_role(current_user["role"])]
     tenant_id = current_user.get("tenant_id") or get_current_tenant_id()
     return {
         "id": current_user["sub"],
         "email": current_user["email"],
         "role": current_user["role"],
+        "roles": current_user.get("roles", []),
         "tenant_id": str(tenant_id) if tenant_id else None,
-        "permissions": permissions,
+        "permissions": current_user.get("permissions", []),
     }

@@ -4,15 +4,18 @@
 
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import api from "../../services/api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import api, { extractApiErrorMessage } from "../../services/api";
 import { Button } from "../../components/common/Button";
 import { Table } from "../../components/common/Table";
 import { FlowStatusBadge } from "../../components/FlowStatusBadge";
+import { Modal } from "../../components/common/Modal";
+import { useToast } from "../../components/common/Toast";
 
 interface Flow {
   id: string;
   name: string;
+  description?: string | null;
   status: string;
   source_id: string;
   target_schema: string;
@@ -28,8 +31,12 @@ const writeModeLabels: Record<string, string> = {
 
 export default function FlowsList() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { addToast } = useToast();
   const [search, setSearch] = useState("");
   const [page, setPage] = useState(1);
+  const [deleteTarget, setDeleteTarget] = useState<Flow | null>(null);
+  const [dropTargetTables, setDropTargetTables] = useState(false);
   const pageSize = 20;
 
   const { data: flows = [], isLoading } = useQuery<Flow[]>({
@@ -40,8 +47,31 @@ export default function FlowsList() {
         .then((r) => r.data),
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (payload: { flowId: string; dropTargetTables: boolean }) =>
+      api.delete(`/flows/${payload.flowId}`, {
+        params: { drop_target_tables: payload.dropTargetTables },
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["flows"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-flows"] });
+      queryClient.invalidateQueries({ queryKey: ["runs"] });
+      addToast("success", "Поток удален");
+      setDeleteTarget(null);
+      setDropTargetTables(false);
+    },
+    onError: (error: unknown) => {
+      addToast("error", extractApiErrorMessage(error, "Не удалось удалить поток"));
+    },
+  });
+
   const columns = [
     { key: "name", header: "Название" },
+    {
+      key: "description",
+      header: "Описание",
+      render: (f: Flow) => f.description?.trim() || "—",
+    },
     {
       key: "status",
       header: "Статус",
@@ -53,6 +83,25 @@ export default function FlowsList() {
       render: (f: Flow) => writeModeLabels[f.write_mode] || f.write_mode,
     },
     { key: "target_schema", header: "Цель" },
+    {
+      key: "actions",
+      header: "Действия",
+      render: (f: Flow) => (
+        <div className="flex items-center gap-2">
+          <Button
+            variant="danger"
+            className="px-2 py-1 text-xs"
+            onClick={(e) => {
+              e.stopPropagation();
+              setDeleteTarget(f);
+              setDropTargetTables(false);
+            }}
+          >
+            Удалить
+          </Button>
+        </div>
+      ),
+    },
   ];
 
   const normalizedSearch = search.trim().toLowerCase();
@@ -60,6 +109,7 @@ export default function FlowsList() {
     if (!normalizedSearch) return true;
     return (
       flow.name.toLowerCase().includes(normalizedSearch) ||
+      (flow.description || "").toLowerCase().includes(normalizedSearch) ||
       flow.status.toLowerCase().includes(normalizedSearch) ||
       flow.target_schema.toLowerCase().includes(normalizedSearch)
     );
@@ -78,7 +128,7 @@ export default function FlowsList() {
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Поиск по имени, статусу или целевой схеме"
+          placeholder="Поиск по имени, описанию, статусу или целевой схеме"
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:ring-2 focus:ring-cyan-500/70 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
         />
       </div>
@@ -101,6 +151,57 @@ export default function FlowsList() {
           Далее
         </Button>
       </div>
+
+      <Modal
+        isOpen={deleteTarget !== null}
+        onClose={() => {
+          if (deleteMutation.isPending) return;
+          setDeleteTarget(null);
+          setDropTargetTables(false);
+        }}
+        title="Удаление потока"
+      >
+        <p className="mb-4 text-sm text-slate-700 dark:text-slate-300">
+          Вы уверены, что хотите удалить поток <strong>{deleteTarget?.name}</strong>?
+        </p>
+        <p className="mb-4 text-xs text-amber-700 dark:text-amber-300">
+          Внимание: действие необратимо. История запусков и настройки потока будут скрыты.
+        </p>
+        <label className="mb-4 flex items-start gap-2 text-sm text-slate-700 dark:text-slate-300">
+          <input
+            type="checkbox"
+            checked={dropTargetTables}
+            onChange={(e) => setDropTargetTables(e.target.checked)}
+            className="mt-0.5"
+          />
+          <span>Также удалить целевые таблицы, созданные этим потоком, из business DB</span>
+        </label>
+        <div className="flex justify-end gap-2">
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setDeleteTarget(null);
+              setDropTargetTables(false);
+            }}
+            disabled={deleteMutation.isPending}
+          >
+            Отмена
+          </Button>
+          <Button
+            variant="danger"
+            loading={deleteMutation.isPending}
+            onClick={() =>
+              deleteTarget &&
+              deleteMutation.mutate({
+                flowId: deleteTarget.id,
+                dropTargetTables,
+              })
+            }
+          >
+            Удалить
+          </Button>
+        </div>
+      </Modal>
     </div>
   );
 }

@@ -1,7 +1,6 @@
 """Role-based permission system (T021)."""
 
 from enum import StrEnum
-from functools import wraps
 from typing import Callable
 
 from fastapi import HTTPException, status
@@ -37,6 +36,45 @@ ROLE_PERMISSIONS: dict[str, set[Permission]] = {
 
 def get_permissions_for_role(role: str) -> set[Permission]:
     return ROLE_PERMISSIONS.get(role, set())
+
+
+KEYCLOAK_ROLE_PERMISSIONS: dict[str, set[Permission]] = {
+    "admin": set(Permission),
+    "viewer": {
+        Permission.SOURCES_READ,
+        Permission.FLOWS_READ,
+        Permission.PREVIEW_READ,
+        Permission.SCHEDULES_READ,
+    },
+    "operator": {
+        Permission.SOURCES_READ,
+        Permission.FLOWS_READ,
+        Permission.FLOWS_RUN,
+        Permission.PREVIEW_READ,
+        Permission.SCHEDULES_READ,
+    },
+    "auditor": {Permission.AUDIT_READ},
+    "sources_read": {Permission.SOURCES_READ},
+    "sources_write": {Permission.SOURCES_WRITE},
+    "flows_read": {Permission.FLOWS_READ},
+    "flows_write": {Permission.FLOWS_WRITE},
+    "flows_run": {Permission.FLOWS_RUN},
+    "preview_read": {Permission.PREVIEW_READ},
+    "schedules_read": {Permission.SCHEDULES_READ},
+    "schedules_write": {Permission.SCHEDULES_WRITE},
+    "audit_read": {Permission.AUDIT_READ},
+    "pii_unmasked": {Permission.PII_UNMASKED},
+}
+
+
+def permissions_from_keycloak_roles(roles: set[str]) -> set[Permission]:
+    if "admin" in roles:
+        return set(Permission)
+
+    permissions: set[Permission] = set()
+    for role in roles:
+        permissions |= KEYCLOAK_ROLE_PERMISSIONS.get(role, set())
+    return permissions
 
 
 def require_permission(permission: Permission) -> Callable:

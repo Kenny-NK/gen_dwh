@@ -1,12 +1,13 @@
 """Run service (T079)."""
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from src.core.config import settings
 from src.models.flow import Flow
 from src.models.run import Run
 
@@ -81,6 +82,8 @@ class RunService:
         return run
 
     async def has_active_run(self, flow_id: UUID) -> bool:
+        await self.mark_stale_pending_runs(flow_id)
+        await self.mark_stale_running_runs(flow_id)
         result = await self.session.execute(
             select(Run).where(
                 Run.flow_id == flow_id,
@@ -88,3 +91,49 @@ class RunService:
             )
         )
         return result.scalar_one_or_none() is not None
+
+    async def mark_stale_pending_runs(self, flow_id: UUID) -> int:
+        stale_before = datetime.now(UTC) - timedelta(minutes=settings.stale_pending_run_minutes)
+        result = await self.session.execute(
+            select(Run).where(
+                Run.flow_id == flow_id,
+                Run.status == "pending",
+                Run.created_at < stale_before,
+            )
+        )
+        stale_runs = list(result.scalars().all())
+        if not stale_runs:
+            return 0
+
+        for run in stale_runs:
+            run.status = "failed"
+            run.error_message = (
+                "Запуск помечен как неуспешный: задача не была обработана worker в ожидаемое время."
+            )
+            run.completed_at = datetime.now(UTC)
+        await self.session.commit()
+        return len(stale_runs)
+
+    async def mark_stale_running_runs(self, flow_id: UUID) -> int:
+        grace_seconds = settings.meltano_command_timeout_seconds + 600
+        stale_before = datetime.now(UTC) - timedelta(seconds=grace_seconds)
+        result = await self.session.execute(
+            select(Run).where(
+                Run.flow_id == flow_id,
+                Run.status == "running",
+                Run.started_at.is_not(None),
+                Run.started_at < stale_before,
+            )
+        )
+        stale_runs = list(result.scalars().all())
+        if not stale_runs:
+            return 0
+
+        for run in stale_runs:
+            run.status = "failed"
+            run.error_message = (
+                "Запуск помечен как неуспешный: превышено допустимое время выполнения."
+            )
+            run.completed_at = datetime.now(UTC)
+        await self.session.commit()
+        return len(stale_runs)

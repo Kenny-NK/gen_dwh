@@ -1,6 +1,7 @@
 """Sources API endpoints (T041-T044)."""
 
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -11,7 +12,7 @@ from src.api.deps import get_current_actor_id, get_tenant_db
 from src.api.audit_utils import log_audit_event
 from src.middleware.auth import get_current_user
 from src.core.config import settings
-from src.services.connection import decrypt_password, discover_schemas, discover_tables
+from src.services.connection import decrypt_password, discover_s3_objects, discover_schemas, discover_tables
 from src.services.source_service import SourceService
 
 router = APIRouter(prefix="/sources", tags=["sources"])
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/sources", tags=["sources"])
 
 class SourceCreate(BaseModel):
     name: str = Field(..., max_length=255)
+    source_type: Literal["postgres", "s3"] = "postgres"
     host: str = Field(..., max_length=255)
     port: int = Field(5432, ge=1, le=65535)
     database: str = Field(..., max_length=255)
@@ -31,6 +33,7 @@ class SourceCreate(BaseModel):
 
 class SourceUpdate(BaseModel):
     name: str | None = None
+    source_type: Literal["postgres", "s3"] | None = None
     host: str | None = None
     port: int | None = None
     database: str | None = None
@@ -42,6 +45,7 @@ class SourceUpdate(BaseModel):
 class SourceResponse(BaseModel):
     id: UUID
     name: str
+    source_type: str
     description: str | None
     host: str
     port: int
@@ -84,6 +88,7 @@ async def create_source(
     service = SourceService(db)
     source = await service.create_source(
         name=body.name,
+        source_type=body.source_type,
         host=body.host,
         port=body.port,
         database=body.database,
@@ -209,6 +214,8 @@ async def get_source_schemas(
 
     try:
         password = await decrypt_password(db, source.credential.password_encrypted)
+        if source.source_type == "s3":
+            return [source.database]
         return await discover_schemas(
             source.host, source.port, source.database, source.username, password
         )
@@ -237,6 +244,16 @@ async def get_source_tables(
 
     try:
         password = await decrypt_password(db, source.credential.password_encrypted)
+        if source.source_type == "s3":
+            if schema_name != source.database:
+                raise HTTPException(status_code=404, detail="Бакет не найден")
+            return await discover_s3_objects(
+                source.host,
+                source.port,
+                source.database,
+                source.username,
+                password,
+            )
         return await discover_tables(
             source.host, source.port, source.database, source.username, password, schema_name
         )

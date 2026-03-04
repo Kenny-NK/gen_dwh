@@ -30,6 +30,8 @@ class NotificationResponse(BaseModel):
 @router.get("")
 async def list_notifications(
     unread_only: bool = Query(False),
+    limit: int = Query(20, ge=1, le=100),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_tenant_db),
     actor_id: UUID | None = Depends(get_current_actor_id),
     current_user: dict = Depends(get_current_user),
@@ -37,7 +39,9 @@ async def list_notifications(
     if not actor_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Пользователь не сопоставлен в локальной БД")
     service = NotificationService(db)
-    notifications = await service.list_notifications(actor_id, unread_only=unread_only)
+    notifications = await service.list_notifications(
+        actor_id, unread_only=unread_only, limit=limit, offset=offset
+    )
     return [NotificationResponse.model_validate(n) for n in notifications]
 
 

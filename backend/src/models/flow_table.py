@@ -22,11 +22,11 @@ class FlowTable(Base, TimestampMixin):
     )
 
     # Source table selection
-    source_schema: Mapped[str] = mapped_column(String(63), nullable=False)
-    source_table: Mapped[str] = mapped_column(String(63), nullable=False)
+    source_schema: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_table: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # Target table name
-    target_table: Mapped[str] = mapped_column(String(63), nullable=False)
+    target_table: Mapped[str] = mapped_column(String(255), nullable=False)
 
     # Replication configuration
     replication_method: Mapped[str] = mapped_column(

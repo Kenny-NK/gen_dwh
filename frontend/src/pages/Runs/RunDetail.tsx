@@ -8,6 +8,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import api, { extractApiErrorMessage } from "../../services/api";
 import { Button } from "../../components/common/Button";
 import { RunStatus } from "../../components/RunStatus";
+import { RunProgressBar } from "../../components/RunProgressBar";
 import { useToast } from "../../components/common/Toast";
 
 interface RunDetailResponse {
@@ -18,10 +19,14 @@ interface RunDetailResponse {
   status: string;
   started_at: string | null;
   completed_at: string | null;
+  tables_processed: number;
   records_processed: number;
+  source_records_total: number | null;
+  source_records_total_is_estimate: boolean;
   records_failed: number;
   retry_count: number;
   error_message: string | null;
+  created_at: string;
 }
 
 const triggerLabels: Record<string, string> = {
@@ -39,9 +44,18 @@ export default function RunDetail() {
     queryKey: ["run", id],
     queryFn: () => api.get(`/runs/${id}`).then((r) => r.data),
     enabled: !!id,
+    refetchInterval: (query) => {
+      const data = query.state.data as RunDetailResponse | undefined;
+      return data && ["pending", "running"].includes(data.status) ? 4000 : false;
+    },
   });
 
   const flowId = run?.flow_id as string | undefined;
+  const { data: flowTables = [] } = useQuery<Array<{ id: string }>>({
+    queryKey: ["flow-tables", flowId],
+    queryFn: () => api.get(`/flows/${flowId}/tables`).then((r) => r.data),
+    enabled: Boolean(flowId),
+  });
 
   const cancelMutation = useMutation({
     mutationFn: () =>
@@ -83,6 +97,17 @@ export default function RunDetail() {
             status={run.status}
             recordsProcessed={run.records_processed}
             recordsFailed={run.records_failed}
+          />
+          <RunProgressBar
+            status={run.status}
+            startedAt={run.started_at}
+            completedAt={run.completed_at}
+            createdAt={run.created_at}
+            recordsProcessed={run.records_processed}
+            sourceRecordsTotal={run.source_records_total}
+            sourceRecordsTotalIsEstimate={run.source_records_total_is_estimate}
+            tablesProcessed={run.tables_processed}
+            totalTables={flowTables.length}
           />
         </div>
         <div className="flex gap-2">

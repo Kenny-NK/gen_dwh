@@ -7,6 +7,7 @@ import type { AxiosError } from "axios";
 
 const api = axios.create({
   baseURL: "/api/v1",
+  withCredentials: true,
   headers: {
     "Content-Type": "application/json",
   },
@@ -18,52 +19,10 @@ type ErrorPayload = {
   error_id?: string;
 };
 
-function getStoredAccessToken(): string | null {
-  const fromSession = sessionStorage.getItem("access_token");
-  if (fromSession) {
-    return fromSession;
-  }
-
-  for (let i = 0; i < sessionStorage.length; i += 1) {
-    const key = sessionStorage.key(i);
-    if (!key || !key.startsWith("oidc.user:")) {
-      continue;
-    }
-
-    const raw = sessionStorage.getItem(key);
-    if (!raw) {
-      continue;
-    }
-
-    try {
-      const parsed = JSON.parse(raw) as { access_token?: string; token_type?: string };
-      if (parsed.access_token && parsed.token_type?.toLowerCase() !== "refresh_token") {
-        return parsed.access_token;
-      }
-    } catch {
-      // Ignore invalid storage values.
-    }
-  }
-
-  return null;
-}
-
-// Request interceptor - attach auth token
-api.interceptors.request.use((config) => {
-  const token = getStoredAccessToken();
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  }
-  return config;
-});
-
 // Response interceptor - handle 401
 api.interceptors.response.use(
   (response) => response,
   (error) => {
-    if (error.response?.status === 401) {
-      sessionStorage.removeItem("access_token");
-    }
     return Promise.reject(error);
   }
 );

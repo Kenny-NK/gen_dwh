@@ -3,7 +3,7 @@
  */
 
 import { useAuth as useOidcAuth } from "react-oidc-context";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useMemo } from "react";
 
 export function useAuth() {
   const auth = useOidcAuth();
@@ -16,16 +16,18 @@ export function useAuth() {
     auth.signinRedirect();
   }, [auth]);
 
-  const logout = useCallback(() => {
-    auth.removeUser();
-    sessionStorage.removeItem("access_token");
-  }, [auth]);
-
-  useEffect(() => {
-    if (user?.access_token) {
-      sessionStorage.setItem("access_token", user.access_token);
+  const logout = useCallback(async () => {
+    try {
+      await fetch("/api/v1/auth/session", {
+        method: "DELETE",
+        credentials: "include",
+      });
+    } finally {
+      await auth.signoutRedirect().catch(() => {
+        auth.removeUser();
+      });
     }
-  }, [user?.access_token]);
+  }, [auth]);
 
   const userInfo = useMemo(() => {
     if (!user?.profile) return null;

@@ -3,7 +3,7 @@
 from datetime import datetime
 from uuid import UUID as PyUUID, uuid4
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -34,6 +34,13 @@ class Run(Base):
     # Metrics
     tables_processed: Mapped[int] = mapped_column(Integer, default=0)
     records_processed: Mapped[int] = mapped_column(BigInteger, default=0)
+    source_records_total: Mapped[int | None] = mapped_column(BigInteger)
+    source_records_total_is_estimate: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=True,
+        server_default="true",
+    )
     records_failed: Mapped[int] = mapped_column(BigInteger, default=0)
 
     # Error information

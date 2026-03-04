@@ -1,6 +1,6 @@
 """Add schedule uniqueness and soft-delete indexes.
 
-Revision ID: 007_schedule_uniqueness_and_soft_delete_indexes
+Revision ID: 007_soft_delete_indexes
 Revises: 006_run_number_uniqueness
 Create Date: 2026-03-01
 """
@@ -9,7 +9,7 @@ from typing import Sequence, Union
 
 from alembic import op
 
-revision: str = "007_schedule_uniqueness_and_soft_delete_indexes"
+revision: str = "007_soft_delete_indexes"
 down_revision: Union[str, None] = "006_run_number_uniqueness"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None

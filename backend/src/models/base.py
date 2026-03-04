@@ -7,11 +7,20 @@ from sqlalchemy import DateTime, func
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.pool import NullPool
 
 from src.core.config import settings
 
-system_engine = create_async_engine(settings.database_system_url, echo=settings.debug)
-business_engine = create_async_engine(settings.database_business_url, echo=settings.debug)
+system_engine = create_async_engine(
+    settings.database_system_url,
+    echo=settings.debug,
+    poolclass=NullPool,
+)
+business_engine = create_async_engine(
+    settings.database_business_url,
+    echo=settings.debug,
+    poolclass=NullPool,
+)
 
 SystemSessionLocal = async_sessionmaker(system_engine, class_=AsyncSession, expire_on_commit=False)
 BusinessSessionLocal = async_sessionmaker(

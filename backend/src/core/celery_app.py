@@ -8,6 +8,10 @@ celery_app = Celery(
     "gendwh",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
+    include=[
+        "src.services.scheduler",
+        "src.tasks.cleanup",
+    ],
 )
 
 celery_app.conf.update(
@@ -19,6 +23,14 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    beat_schedule={
+        "dispatch-due-schedules": {
+            "task": "src.services.scheduler.dispatch_due_schedules",
+            "schedule": 60.0,
+        },
+        "cleanup-expired-previews": {
+            "task": "src.tasks.cleanup.cleanup_expired_previews",
+            "schedule": 300.0,
+        },
+    },
 )
-
-celery_app.autodiscover_tasks(["src.services", "src.tasks"])

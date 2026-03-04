@@ -127,11 +127,76 @@ async def _ensure_tenant_schema_tables() -> None:
         print(f"Ensured tenant schema and tables: {schema_name}")
 
 
+async def _ensure_tenant_schema_compatibility() -> None:
+    """Apply lightweight, idempotent schema upgrades for tenant tables."""
+    schemas = await _get_active_tenant_schemas()
+    for schema_name in schemas:
+        async with system_engine.begin() as conn:
+            await conn.execute(
+                text(
+                    f"""
+                    ALTER TABLE "{schema_name}".sources
+                    ADD COLUMN IF NOT EXISTS source_type VARCHAR(20) NOT NULL DEFAULT 'postgres'
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    f"""
+                    CREATE INDEX IF NOT EXISTS idx_sources_type
+                    ON "{schema_name}".sources (source_type)
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    f"""
+                    ALTER TABLE "{schema_name}".flow_tables
+                    ALTER COLUMN source_schema TYPE VARCHAR(255)
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    f"""
+                    ALTER TABLE "{schema_name}".flow_tables
+                    ALTER COLUMN source_table TYPE VARCHAR(255)
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    f"""
+                    ALTER TABLE "{schema_name}".flow_tables
+                    ALTER COLUMN target_table TYPE VARCHAR(255)
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    f"""
+                    ALTER TABLE "{schema_name}".runs
+                    ADD COLUMN IF NOT EXISTS source_records_total BIGINT
+                    """
+                )
+            )
+            await conn.execute(
+                text(
+                    f"""
+                    ALTER TABLE "{schema_name}".runs
+                    ADD COLUMN IF NOT EXISTS source_records_total_is_estimate BOOLEAN NOT NULL DEFAULT true
+                    """
+                )
+            )
+        print(f"Ensured tenant schema compatibility upgrades: {schema_name}")
+
+
 async def main() -> None:
     await _apply_migrations()
     await _ensure_pgcrypto()
     await _ensure_default_tenant()
     await _ensure_tenant_schema_tables()
+    await _ensure_tenant_schema_compatibility()
     print("Backend bootstrap completed")
 
 

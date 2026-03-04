@@ -11,6 +11,7 @@ COPY backend/src ./src
 RUN pip install --no-cache-dir .
 
 COPY backend/ .
+COPY meltano ./meltano
 
 # Install meltano for worker tasks
 RUN pip install --no-cache-dir meltano

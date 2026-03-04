@@ -1,6 +1,9 @@
-import React, { useState } from "react";
+import React from "react";
 import { useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useForm } from "react-hook-form";
+import { z } from "zod";
+import { zodResolver } from "@hookform/resolvers/zod";
 
 import api, { extractApiErrorMessage } from "../../services/api";
 import { Button } from "../../components/common/Button";
@@ -10,18 +13,34 @@ import { useToast } from "../../components/common/Toast";
 type Source = {
   id: string;
   name: string;
+  source_type: "postgres" | "s3";
   connection_status: string;
 };
 
-type FlowPayload = {
-  name: string;
-  source_id: string;
-  target_schema: string;
-  write_mode: "append" | "upsert" | "replace";
-  description?: string;
-  target_table_prefix?: string;
-  upsert_key?: string;
-};
+const flowSchema = z
+  .object({
+    name: z.string().trim().min(1, "Название обязательно").max(255, "Максимум 255 символов"),
+    source_id: z.string().trim().min(1, "Источник обязателен"),
+    target_schema: z
+      .string()
+      .trim()
+      .min(1, "Целевая схема обязательна")
+      .max(63, "Максимум 63 символа"),
+    write_mode: z.enum(["append", "upsert", "replace"]),
+    description: z.string().optional().default(""),
+    target_table_prefix: z.string().optional().default(""),
+    upsert_key: z.string().optional().default(""),
+  })
+  .superRefine((value, ctx) => {
+    if (value.write_mode === "upsert" && !value.upsert_key?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["upsert_key"],
+        message: "Для режима upsert укажите ключ",
+      });
+    }
+  });
+type FlowPayload = z.infer<typeof flowSchema>;
 
 const defaultPayload: FlowPayload = {
   name: "",
@@ -37,7 +56,16 @@ export default function FlowCreate() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { addToast } = useToast();
-  const [payload, setPayload] = useState<FlowPayload>(defaultPayload);
+  const {
+    register,
+    handleSubmit,
+    watch,
+    formState: { errors, isValid },
+  } = useForm<FlowPayload>({
+    resolver: zodResolver(flowSchema),
+    defaultValues: defaultPayload,
+    mode: "onChange",
+  });
 
   const { data: sources = [] } = useQuery<Source[]>({
     queryKey: ["sources", "valid-for-flow"],
@@ -45,7 +73,7 @@ export default function FlowCreate() {
   });
 
   const createFlow = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (payload: FlowPayload) => {
       const body: Record<string, unknown> = {
         ...payload,
       };
@@ -73,6 +101,7 @@ export default function FlowCreate() {
   });
 
   const hasValidSources = sources.length > 0;
+  const writeMode = watch("write_mode");
 
   return (
     <div className="mx-auto max-w-2xl app-card p-6">
@@ -83,11 +112,11 @@ export default function FlowCreate() {
         </p>
       </div>
 
-      <div className="space-y-4">
+      <form className="space-y-4" onSubmit={handleSubmit((values) => createFlow.mutate(values))}>
         <Input
           label="Название потока"
-          value={payload.name}
-          onChange={(e) => setPayload((prev) => ({ ...prev, name: e.target.value }))}
+          error={errors.name?.message}
+          {...register("name")}
           placeholder="например, sales_incremental"
           required
         />
@@ -96,14 +125,13 @@ export default function FlowCreate() {
           <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Источник</label>
           <select
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-500/70 transition focus:ring-2 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-            value={payload.source_id}
-            onChange={(e) => setPayload((prev) => ({ ...prev, source_id: e.target.value }))}
+            {...register("source_id")}
             disabled={!hasValidSources}
           >
             <option value="">Выберите источник</option>
             {sources.map((source) => (
               <option key={source.id} value={source.id}>
-                {source.name}
+                {source.name} ({source.source_type === "s3" ? "S3" : "PostgreSQL"})
               </option>
             ))}
           </select>
@@ -117,8 +145,8 @@ export default function FlowCreate() {
         <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
           <Input
             label="Целевая схема"
-            value={payload.target_schema}
-            onChange={(e) => setPayload((prev) => ({ ...prev, target_schema: e.target.value }))}
+            error={errors.target_schema?.message}
+            {...register("target_schema")}
             required
           />
 
@@ -126,13 +154,7 @@ export default function FlowCreate() {
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Режим записи</label>
             <select
               className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none ring-cyan-500/70 transition focus:ring-2 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-              value={payload.write_mode}
-              onChange={(e) =>
-                setPayload((prev) => ({
-                  ...prev,
-                  write_mode: e.target.value as FlowPayload["write_mode"],
-                }))
-              }
+              {...register("write_mode")}
             >
               <option value="append">Добавление</option>
               <option value="upsert">Обновление и вставка</option>
@@ -141,40 +163,40 @@ export default function FlowCreate() {
           </div>
         </div>
 
-        {payload.write_mode === "upsert" && (
+        {writeMode === "upsert" && (
           <Input
             label="Ключ upsert"
-            value={payload.upsert_key}
-            onChange={(e) => setPayload((prev) => ({ ...prev, upsert_key: e.target.value }))}
+            error={errors.upsert_key?.message}
+            {...register("upsert_key")}
             placeholder="например, id"
           />
         )}
 
         <Input
           label="Префикс таблиц"
-          value={payload.target_table_prefix}
-          onChange={(e) => setPayload((prev) => ({ ...prev, target_table_prefix: e.target.value }))}
+          error={errors.target_table_prefix?.message}
+          {...register("target_table_prefix")}
           placeholder="необязательно"
         />
 
         <Input
           label="Описание"
-          value={payload.description}
-          onChange={(e) => setPayload((prev) => ({ ...prev, description: e.target.value }))}
+          error={errors.description?.message}
+          {...register("description")}
           placeholder="необязательно"
         />
 
         <div className="flex items-center gap-3 pt-2">
           <Button
-            onClick={() => createFlow.mutate()}
+            type="submit"
             loading={createFlow.isPending}
-            disabled={!payload.name || !payload.source_id || !payload.target_schema}
+            disabled={!isValid || !hasValidSources}
           >
             Создать поток
           </Button>
           <Button variant="secondary" onClick={() => navigate("/flows")}>Отмена</Button>
         </div>
-      </div>
+      </form>
     </div>
   );
 }

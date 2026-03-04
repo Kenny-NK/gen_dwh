@@ -26,7 +26,10 @@ class RunResponse(BaseModel):
     status: str
     started_at: datetime | None
     completed_at: datetime | None
+    tables_processed: int
     records_processed: int
+    source_records_total: int | None
+    source_records_total_is_estimate: bool
     records_failed: int
     error_message: str | None
     retry_count: int

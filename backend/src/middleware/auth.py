@@ -2,10 +2,11 @@
 
 from uuid import UUID
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from src.core.permissions import get_permissions_for_role
+from src.core.config import settings
+from src.core.permissions import get_permissions_for_role, permissions_from_keycloak_roles
 from src.core.security import KeycloakUnavailableError, decode_jwt
 from src.core.tenant import current_tenant_id, current_tenant_schema
 
@@ -13,10 +14,12 @@ security = HTTPBearer(auto_error=False)
 
 
 async def get_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
 ) -> dict:
     """Extract and validate JWT token, return user info."""
-    if credentials is None:
+    token = credentials.credentials if credentials else request.cookies.get(settings.auth_cookie_name)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Не авторизован",
@@ -24,7 +27,7 @@ async def get_current_user(
         )
 
     try:
-        payload = await decode_jwt(credentials.credentials)
+        payload = await decode_jwt(token)
     except KeycloakUnavailableError:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -63,13 +66,17 @@ async def get_current_user(
     )
     all_roles = {str(role) for role in roles} | {str(role) for role in client_roles}
     role = "admin" if "admin" in all_roles else "user"
-    permissions = [str(permission) for permission in get_permissions_for_role(role)]
+    resolved_permissions = permissions_from_keycloak_roles(all_roles)
+    if not resolved_permissions:
+        resolved_permissions = get_permissions_for_role(role)
+    permissions = [str(permission) for permission in resolved_permissions]
 
     user = {
         "sub": str(sub),
         "email": payload.get("email", ""),
         "tenant_id": tenant_id,
         "role": role,
+        "roles": sorted(all_roles),
         "permissions": permissions,
     }
 

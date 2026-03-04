@@ -1,5 +1,7 @@
 """Application configuration module (T015)."""
 
+from urllib.parse import urlparse
+
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
@@ -16,10 +18,15 @@ class Settings(BaseSettings):
     external_service_failure_threshold: int = Field(default=5, ge=1, le=20)
     external_service_cooldown_seconds: int = Field(default=60, ge=5, le=3_600)
     meltano_command_timeout_seconds: int = Field(default=3600, ge=60, le=86_400)
+    stale_pending_run_minutes: int = Field(default=15, ge=1, le=1_440)
     trust_proxy_headers: bool = False
     allow_realm_tenant_fallback: bool = True
     cors_allowed_origins: str = "http://localhost:5173"
     enforce_secure_secrets: bool = True
+    auth_cookie_name: str = "gendwh_access_token"
+    auth_cookie_max_age_seconds: int = Field(default=3600, ge=300, le=86_400)
+    auth_cookie_secure: bool = False
+    auth_cookie_samesite: str = "lax"
 
     # Database
     database_system_url: str = "postgresql+asyncpg://gendwh:gendwh_local_dev_pw@localhost:5432/gendwh_system"
@@ -27,7 +34,7 @@ class Settings(BaseSettings):
     db_encryption_key: str = "dev-only-db-encryption-key-change-me"
 
     # Redis
-    redis_url: str = "redis://localhost:6379/0"
+    redis_url: str = "redis://:gendwh_local_dev_redis_pw@localhost:6379/0"
 
     # Keycloak
     keycloak_url: str = "http://localhost:8080"
@@ -69,6 +76,12 @@ class Settings(BaseSettings):
                 raise ValueError("DATABASE_SYSTEM_URL must not use default password")
             if "password@localhost" in self.database_business_url:
                 raise ValueError("DATABASE_BUSINESS_URL must not use default password")
+            parsed_redis = urlparse(self.redis_url)
+            if parsed_redis.scheme.startswith("redis") and not parsed_redis.password:
+                raise ValueError("REDIS_URL must include password when ENFORCE_SECURE_SECRETS=true")
+
+        if self.auth_cookie_samesite.lower() not in {"lax", "strict", "none"}:
+            raise ValueError("AUTH_COOKIE_SAMESITE must be one of: lax, strict, none")
 
         return self
 

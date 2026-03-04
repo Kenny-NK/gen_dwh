@@ -37,8 +37,8 @@ class FlowUpdate(BaseModel):
 
 
 class FlowTableCreate(BaseModel):
-    source_schema: str = Field(..., max_length=63)
-    source_table: str = Field(..., max_length=63)
+    source_schema: str = Field(..., max_length=255)
+    source_table: str = Field(..., max_length=255)
     target_table: str | None = None
     replication_method: str = "FULL_TABLE"
     replication_key: str | None = None
@@ -185,12 +185,24 @@ async def update_flow(
 async def delete_flow(
     flow_id: UUID,
     request: Request,
+    drop_target_tables: bool = Query(False, description="Удалить целевые таблицы в business DB"),
     db: AsyncSession = Depends(get_tenant_db),
     actor_id: UUID | None = Depends(get_current_actor_id),
     current_user: dict = Depends(get_current_user),
 ) -> None:
     service = FlowService(db)
-    deleted = await service.delete_flow(flow_id)
+    flow = await service.get_flow(flow_id)
+    if not flow:
+        raise HTTPException(status_code=404, detail="Поток не найден")
+    if flow.status == "running":
+        raise HTTPException(
+            status_code=400,
+            detail="Нельзя удалить поток во время выполнения. Сначала дождитесь завершения или отмените запуск.",
+        )
+    try:
+        deleted = await service.delete_flow(flow_id, drop_target_tables=drop_target_tables)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if not deleted:
         raise HTTPException(status_code=404, detail="Поток не найден")
     await log_audit_event(
@@ -201,6 +213,7 @@ async def delete_flow(
         entity_id=flow_id,
         user_id=actor_id,
         user_email=current_user.get("email"),
+        changes={"drop_target_tables": drop_target_tables},
     )
 
 
@@ -351,10 +364,38 @@ async def update_flow_table(
 async def remove_flow_table(
     flow_id: UUID,
     table_id: UUID,
+    request: Request,
+    drop_target_table: bool = Query(False, description="Удалить целевую таблицу в business DB"),
     db: AsyncSession = Depends(get_tenant_db),
+    actor_id: UUID | None = Depends(get_current_actor_id),
     current_user: dict = Depends(get_current_user),
 ) -> None:
     service = FlowService(db)
-    removed = await service.remove_table(table_id, flow_id=flow_id)
+    flow = await service.get_flow(flow_id)
+    if not flow:
+        raise HTTPException(status_code=404, detail="Поток не найден")
+    if flow.status == "running":
+        raise HTTPException(
+            status_code=400,
+            detail="Нельзя удалять таблицы из потока во время выполнения.",
+        )
+    try:
+        removed = await service.remove_table(
+            table_id,
+            flow_id=flow_id,
+            drop_target_table=drop_target_table,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     if not removed:
         raise HTTPException(status_code=404, detail="Таблица не найдена")
+    await log_audit_event(
+        db=db,
+        request=request,
+        action="remove_table",
+        entity_type="flow",
+        entity_id=flow_id,
+        user_id=actor_id,
+        user_email=current_user.get("email"),
+        changes={"table_id": str(table_id), "drop_target_table": drop_target_table},
+    )

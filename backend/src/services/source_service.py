@@ -10,7 +10,12 @@ from sqlalchemy.orm import selectinload
 from src.models.flow import Flow
 from src.models.source import Source
 from src.models.source_credential import SourceCredential
-from src.services.connection import decrypt_password, encrypt_password, test_connection
+from src.services.connection import (
+    decrypt_password,
+    encrypt_password,
+    test_connection,
+    test_s3_connection,
+)
 
 
 class SourceService:
@@ -42,6 +47,7 @@ class SourceService:
     async def create_source(
         self,
         name: str,
+        source_type: str,
         host: str,
         port: int,
         database: str,
@@ -50,8 +56,10 @@ class SourceService:
         description: str | None = None,
         created_by: UUID | None = None,
     ) -> Source:
+        normalized_source_type = (source_type or "postgres").lower()
         source = Source(
             name=name,
+            source_type=normalized_source_type,
             host=host,
             port=port,
             database=database,
@@ -72,7 +80,10 @@ class SourceService:
         self.session.add(credential)
 
         # Test connection
-        result = await test_connection(host, port, database, username, password)
+        if normalized_source_type == "s3":
+            result = await test_s3_connection(host, port, database, username, password)
+        else:
+            result = await test_connection(host, port, database, username, password)
         source.connection_status = "valid" if result.success else "invalid"
         source.last_validated_at = datetime.now(UTC)
         if not result.success:
@@ -89,12 +100,14 @@ class SourceService:
         if not source:
             return None
 
-        connection_fields = {"host", "port", "database", "username"}
+        connection_fields = {"source_type", "host", "port", "database", "username"}
         connection_changed = any(
             field in kwargs and kwargs[field] != getattr(source, field)
             for field in connection_fields
         )
         password = kwargs.pop("password", None)
+        if "source_type" in kwargs and kwargs["source_type"] is not None:
+            kwargs["source_type"] = str(kwargs["source_type"]).lower()
         if password is not None and password != "":
             connection_changed = True
 
@@ -123,9 +136,14 @@ class SourceService:
                     plain_password = await decrypt_password(
                         self.session, source.credential.password_encrypted
                     )
-                result = await test_connection(
-                    source.host, source.port, source.database, source.username, plain_password
-                )
+                if source.source_type == "s3":
+                    result = await test_s3_connection(
+                        source.host, source.port, source.database, source.username, plain_password
+                    )
+                else:
+                    result = await test_connection(
+                        source.host, source.port, source.database, source.username, plain_password
+                    )
                 source.connection_status = "valid" if result.success else "invalid"
                 source.last_validated_at = datetime.now(UTC)
                 source.validation_error = None if result.success else result.message
@@ -157,14 +175,27 @@ class SourceService:
         return True
 
     async def test_source_connection(self, source_id: UUID) -> dict:
-        from src.services.connection import decrypt_password
-
         source = await self.get_source(source_id)
         if not source or not source.credential:
             return {"success": False, "message": "Источник не найден"}
 
         password = await decrypt_password(self.session, source.credential.password_encrypted)
-        result = await test_connection(source.host, source.port, source.database, source.username, password)
+        if source.source_type == "s3":
+            result = await test_s3_connection(
+                source.host,
+                source.port,
+                source.database,
+                source.username,
+                password,
+            )
+        else:
+            result = await test_connection(
+                source.host,
+                source.port,
+                source.database,
+                source.username,
+                password,
+            )
 
         source.connection_status = "valid" if result.success else "invalid"
         source.last_validated_at = datetime.now(UTC)

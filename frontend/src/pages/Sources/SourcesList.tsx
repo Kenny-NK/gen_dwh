@@ -15,6 +15,7 @@ import { useToast } from "../../components/common/Toast";
 interface Source {
   id: string;
   name: string;
+  description?: string | null;
   host: string;
   port: number;
   database: string;
@@ -55,6 +56,11 @@ export default function SourcesList() {
 
   const columns = [
     { key: "name", header: "Название" },
+    {
+      key: "description",
+      header: "Описание",
+      render: (s: Source) => s.description?.trim() || "—",
+    },
     { key: "host", header: "Хост" },
     { key: "database", header: "База данных" },
     {
@@ -97,6 +103,7 @@ export default function SourcesList() {
     if (!normalizedSearch) return true;
     return (
       source.name.toLowerCase().includes(normalizedSearch) ||
+      (source.description || "").toLowerCase().includes(normalizedSearch) ||
       source.host.toLowerCase().includes(normalizedSearch) ||
       source.database.toLowerCase().includes(normalizedSearch)
     );
@@ -115,7 +122,7 @@ export default function SourcesList() {
           type="search"
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          placeholder="Поиск по названию, хосту или БД"
+          placeholder="Поиск по названию, описанию, хосту или БД"
           className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none transition focus:ring-2 focus:ring-cyan-500/70 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
         />
       </div>
@@ -144,7 +151,12 @@ export default function SourcesList() {
         onClose={() => setDeleteId(null)}
         title="Удаление источника"
       >
-        <p className="mb-4 text-sm text-slate-700 dark:text-slate-300">Вы уверены, что хотите удалить источник?</p>
+        <p className="mb-3 text-sm text-slate-700 dark:text-slate-300">
+          Вы уверены, что хотите удалить источник?
+        </p>
+        <p className="mb-4 text-xs text-amber-700 dark:text-amber-300">
+          Внимание: это действие необратимо. Потоки, связанные с этим источником, больше не смогут выполняться.
+        </p>
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={() => setDeleteId(null)}>
             Отмена

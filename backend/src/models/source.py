@@ -13,6 +13,7 @@ from src.models.base import Base, TimestampMixin
 class Source(Base, TimestampMixin):
     __tablename__ = "sources"
     __table_args__ = (
+        Index("idx_sources_type", "source_type"),
         Index("idx_sources_status", "connection_status"),
         Index("idx_sources_deleted_at", "deleted_at"),
     )
@@ -22,6 +23,7 @@ class Source(Base, TimestampMixin):
     description: Mapped[str | None] = mapped_column(Text)
 
     # Connection parameters
+    source_type: Mapped[str] = mapped_column(String(20), nullable=False, default="postgres")
     host: Mapped[str] = mapped_column(String(255), nullable=False)
     port: Mapped[int] = mapped_column(Integer, nullable=False, default=5432)
     database: Mapped[str] = mapped_column(String(255), nullable=False)

@@ -19,6 +19,11 @@
     "axios": "^1.6.0",
     "oidc-client-ts": "^3.0.0",
     "react-oidc-context": "^3.1.0",
+    "react-hook-form": "^7.56.1",
+    "zod": "^3.24.2",
+    "@hookform/resolvers": "^3.10.0",
+    "i18next": "^24.2.3",
+    "react-i18next": "^15.4.1",
     "cronstrue": "^2.50.0",
     "@tanstack/react-query": "^5.17.0"
   },

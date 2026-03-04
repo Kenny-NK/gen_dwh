@@ -1,6 +1,6 @@
-version: 1
 send_anonymous_usage_stats: false
 project_id: gen-dwh
+requires_meltano: ">=4.0.0,<5.0.0"
 
 default_environment: dev
 
@@ -21,6 +21,16 @@ plugins:
         password: ${TAP_POSTGRES_PASSWORD}
         database: ${TAP_POSTGRES_DATABASE}
         default_replication_method: INCREMENTAL
+    - name: tap-s3-csv
+      variant: s7clarke10
+      pip_url: pipelinewise-tap-s3-csv
+      config:
+        aws_access_key_id: ${TAP_S3_CSV_AWS_ACCESS_KEY_ID}
+        aws_secret_access_key: ${TAP_S3_CSV_AWS_SECRET_ACCESS_KEY}
+        aws_endpoint_url: ${TAP_S3_CSV_AWS_ENDPOINT_URL}
+        bucket: ${TAP_S3_CSV_BUCKET}
+        tables: ${TAP_S3_CSV_TABLES}
+        warning_if_no_file: true
 
   loaders:
     - name: target-postgres

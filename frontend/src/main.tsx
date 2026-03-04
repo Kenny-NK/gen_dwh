@@ -12,6 +12,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/common/Toast";
+import "./i18n";
+import { MemoryStateStore } from "./services/memoryStore";
 import "./styles.css";
 
 // Lazy-loaded pages
@@ -46,7 +48,8 @@ const oidcConfig = {
     ? `${import.meta.env.VITE_KEYCLOAK_URL}/realms/${import.meta.env.VITE_KEYCLOAK_REALM || "gendwh"}`
     : "http://localhost:8080/realms/gendwh",
   client_id: import.meta.env.VITE_KEYCLOAK_CLIENT_ID || "gendwh-app",
-  userStore: new WebStorageStateStore({ store: window.sessionStorage }),
+  userStore: new MemoryStateStore(),
+  stateStore: new WebStorageStateStore({ store: window.sessionStorage }),
   automaticSilentRenew: true,
   redirect_uri: window.location.origin,
   post_logout_redirect_uri: window.location.origin,
@@ -57,25 +60,82 @@ const oidcConfig = {
 };
 
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
-  const { isLoading, isAuthenticated, signinRedirect, signinSilent } = useAuth();
+  const { isLoading, isAuthenticated, signinRedirect, user, activeNavigator } = useAuth();
   const redirectStarted = React.useRef(false);
+  const sessionInitialized = React.useRef(false);
+  const [sessionReady, setSessionReady] = React.useState(false);
+  const [sessionInitFailed, setSessionInitFailed] = React.useState(false);
 
   React.useEffect(() => {
-    if (!isLoading && !isAuthenticated && !redirectStarted.current) {
-      redirectStarted.current = true;
-      signinRedirect();
+    if (isLoading || isAuthenticated) {
+      return;
     }
-  }, [isLoading, isAuthenticated, signinRedirect]);
+    // During silent renew / callback transitions don't trigger an extra redirect.
+    if (activeNavigator) {
+      return;
+    }
+    // Avoid full-page redirect loops after the app has already established
+    // the backend cookie session once.
+    if (sessionInitialized.current) {
+      return;
+    }
+    if (!redirectStarted.current) {
+      redirectStarted.current = true;
+      void signinRedirect();
+    }
+  }, [activeNavigator, isAuthenticated, isLoading, signinRedirect]);
 
   React.useEffect(() => {
-    if (!isAuthenticated) return;
-    const timer = window.setInterval(() => {
-      void signinSilent().catch(() => {
-        // Silent refresh failure is handled by normal auth guard redirect.
+    if (!isAuthenticated) {
+      if (!sessionInitialized.current && !activeNavigator) {
+        setSessionReady(false);
+      }
+      setSessionInitFailed(false);
+      return;
+    }
+
+    if (!user?.access_token) {
+      if (!sessionInitialized.current) {
+        setSessionReady(false);
+      }
+      return;
+    }
+
+    let cancelled = false;
+    setSessionInitFailed(false);
+
+    void fetch("/api/v1/auth/session", {
+      method: "POST",
+      credentials: "include",
+      headers: {
+        Authorization: `Bearer ${user.access_token}`,
+      },
+    })
+      .then((resp) => {
+        if (!resp.ok) {
+          throw new Error("Failed to initialize server session");
+        }
+        if (!cancelled) {
+          sessionInitialized.current = true;
+          setSessionReady(true);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          if (!sessionInitialized.current) {
+            setSessionReady(false);
+            setSessionInitFailed(true);
+          }
+        }
+      })
+      .finally(() => {
+        // no-op: subsequent session sync should not unmount route content
       });
-    }, 5 * 60 * 1000);
-    return () => window.clearInterval(timer);
-  }, [isAuthenticated, signinSilent]);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated, user?.access_token]);
 
   if (isLoading) {
     return <div className="flex h-screen items-center justify-center">Загрузка...</div>;
@@ -83,6 +143,18 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (!isAuthenticated) {
     return <div className="flex h-screen items-center justify-center">Переход к авторизации...</div>;
+  }
+
+  if (sessionInitFailed) {
+    return (
+      <div className="flex h-screen items-center justify-center">
+        Не удалось инициализировать сессию. Обновите страницу.
+      </div>
+    );
+  }
+
+  if (!sessionReady) {
+    return <div className="flex h-screen items-center justify-center">Инициализация сессии...</div>;
   }
 
   return <>{children}</>;

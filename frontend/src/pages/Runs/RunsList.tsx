@@ -8,6 +8,7 @@ import { useQuery } from "@tanstack/react-query";
 import api from "../../services/api";
 import { Table } from "../../components/common/Table";
 import { RunStatus } from "../../components/RunStatus";
+import { RunProgressBar } from "../../components/RunProgressBar";
 
 interface Run {
   id: string;
@@ -15,7 +16,12 @@ interface Run {
   run_number: number;
   triggered_by: string;
   status: string;
+  started_at: string | null;
+  completed_at: string | null;
+  tables_processed: number;
   records_processed: number;
+  source_records_total: number | null;
+  source_records_total_is_estimate: boolean;
   created_at: string;
   [key: string]: unknown;
 }
@@ -41,6 +47,10 @@ export default function RunsList() {
           params: { limit: pageSize, offset: (page - 1) * pageSize },
         })
         .then((r) => r.data),
+    refetchInterval: (query) => {
+      const data = query.state.data as Run[] | undefined;
+      return data?.some((run) => ["pending", "running"].includes(run.status)) ? 5000 : false;
+    },
   });
 
   const columns = [
@@ -53,7 +63,21 @@ export default function RunsList() {
     {
       key: "status",
       header: "Статус",
-      render: (r: Run) => <RunStatus status={r.status} recordsProcessed={r.records_processed} />,
+      render: (r: Run) => (
+        <div className="min-w-[220px]">
+          <RunStatus status={r.status} recordsProcessed={r.records_processed} />
+          <RunProgressBar
+            status={r.status}
+            startedAt={r.started_at}
+            completedAt={r.completed_at}
+            createdAt={r.created_at}
+            recordsProcessed={r.records_processed}
+            sourceRecordsTotal={r.source_records_total}
+            sourceRecordsTotalIsEstimate={r.source_records_total_is_estimate}
+            tablesProcessed={r.tables_processed}
+          />
+        </div>
+      ),
     },
     {
       key: "created_at",

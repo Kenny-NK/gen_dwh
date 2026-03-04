@@ -1,18 +1,23 @@
 """Preview execution service (T056, T057)."""
 
+import asyncio
 from datetime import UTC, datetime, timedelta
 import re
 from uuid import UUID
 
 import asyncpg
+import boto3
+from botocore.exceptions import BotoCoreError, ClientError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.models.flow import Flow
+from src.models.flow_table import FlowTable
 from src.models.preview_session import PreviewSession
 from src.models.source import Source
-from src.services.connection import decrypt_password
+from src.services.connection import build_s3_endpoint_url, decrypt_password
+from src.services.s3_loader import parse_s3_object_rows
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
@@ -87,7 +92,7 @@ class PreviewService:
         sort_by: str | None = None,
         sort_order: str = "asc",
     ) -> dict:
-        """Get preview data directly from source PostgreSQL."""
+        """Get preview data from source (PostgreSQL or S3)."""
         preview = await self.get_session(session_id)
         if not preview or preview.status not in {"completed", "running"}:
             return {"rows": [], "total": 0}
@@ -104,7 +109,19 @@ class PreviewService:
         if not flow or not flow.source or not flow.source.credential:
             return {"rows": [], "total": 0}
 
-        schema_name, table_name = self._resolve_source_table(flow, table)
+        flow_table = self._resolve_flow_table(flow, table)
+        if str(flow.source.source_type or "").lower() == "s3":
+            return await self._get_s3_preview_data(
+                flow=flow,
+                flow_table=flow_table,
+                preview=preview,
+                page=page,
+                page_size=page_size,
+                sort_by=sort_by,
+                sort_order=sort_order,
+            )
+
+        schema_name, table_name = flow_table.source_schema, flow_table.source_table
         schema = _validate_identifier(schema_name, "schema")
         table_name = _validate_identifier(table_name, "table")
         offset = (page - 1) * page_size
@@ -172,16 +189,95 @@ class PreviewService:
         }
 
     @staticmethod
-    def _resolve_source_table(flow: Flow, table: str) -> tuple[str, str]:
+    def _resolve_flow_table(flow: Flow, table: str) -> FlowTable:
         lookup = table.strip()
-        if "." in lookup:
-            schema_name, table_name = lookup.split(".", 1)
-            for ft in flow.tables:
-                if ft.source_schema == schema_name and ft.source_table == table_name:
-                    return schema_name, table_name
-            raise ValueError("Table not configured in flow")
+
+        # Prefer exact full-name match to support names containing dots
+        # (for example S3 buckets/keys like "bucket.with.dots/file.csv").
+        for ft in flow.tables:
+            if f"{ft.source_schema}.{ft.source_table}" == lookup:
+                return ft
 
         for ft in flow.tables:
             if ft.source_table == lookup:
-                return ft.source_schema, ft.source_table
+                return ft
         raise ValueError("Table not configured in flow")
+
+    async def _get_s3_preview_data(
+        self,
+        flow: Flow,
+        flow_table: FlowTable,
+        preview: PreviewSession,
+        page: int,
+        page_size: int,
+        sort_by: str | None,
+        sort_order: str,
+    ) -> dict:
+        password = await decrypt_password(self.session, flow.source.credential.password_encrypted)
+        endpoint_url = build_s3_endpoint_url(flow.source.host, flow.source.port)
+
+        def _download_sync() -> bytes:
+            client = boto3.client(
+                "s3",
+                aws_access_key_id=flow.source.username,
+                aws_secret_access_key=password,
+                endpoint_url=endpoint_url,
+            )
+            response = client.get_object(Bucket=flow.source.database, Key=flow_table.source_table)
+            return bytes(response["Body"].read())
+
+        try:
+            object_bytes = await asyncio.to_thread(_download_sync)
+        except (ClientError, BotoCoreError) as exc:
+            raise ValueError(f"S3 preview error: {exc}") from exc
+
+        limit = max(1, int(preview.row_limit))
+        columns, matrix_rows = parse_s3_object_rows(
+            flow_table.source_table,
+            object_bytes,
+            row_limit=limit,
+        )
+        if not columns:
+            return {
+                "columns": [],
+                "rows": [],
+                "total": 0,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": 0,
+            }
+
+        if sort_by and sort_by not in columns:
+            raise ValueError("Invalid sort_by column")
+
+        order_desc = str(sort_order).lower() == "desc"
+        if sort_by:
+            sort_idx = columns.index(sort_by)
+            matrix_rows.sort(
+                key=lambda row: (row[sort_idx] is None, str(row[sort_idx] or "").lower()),
+                reverse=order_desc,
+            )
+
+        total = len(matrix_rows)
+        offset = (page - 1) * page_size
+        if offset >= total:
+            return {
+                "columns": columns,
+                "rows": [],
+                "total": total,
+                "page": page,
+                "page_size": page_size,
+                "total_pages": (total + page_size - 1) // page_size if total else 0,
+            }
+
+        page_rows = matrix_rows[offset : offset + page_size]
+        rows = [dict(zip(columns, values, strict=False)) for values in page_rows]
+
+        return {
+            "columns": columns,
+            "rows": rows,
+            "total": total,
+            "page": page,
+            "page_size": page_size,
+            "total_pages": (total + page_size - 1) // page_size if total else 0,
+        }

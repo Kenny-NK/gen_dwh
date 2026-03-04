@@ -4,6 +4,7 @@
 
 import React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useTranslation } from "react-i18next";
 import api from "../../services/api";
 
 interface NotificationListProps {
@@ -27,11 +28,17 @@ const typeColors: Record<string, string> = {
 };
 
 export function NotificationList({ onClose }: NotificationListProps) {
+  const { t } = useTranslation();
   const queryClient = useQueryClient();
+  const [page, setPage] = React.useState(1);
+  const pageSize = 10;
 
   const { data: notifications = [] } = useQuery<NotificationItem[]>({
-    queryKey: ["notifications"],
-    queryFn: () => api.get("/notifications").then((r) => r.data),
+    queryKey: ["notifications", page],
+    queryFn: () =>
+      api
+        .get("/notifications", { params: { limit: pageSize, offset: (page - 1) * pageSize } })
+        .then((r) => r.data),
   });
 
   const markAllRead = useMutation({
@@ -45,12 +52,12 @@ export function NotificationList({ onClose }: NotificationListProps) {
   return (
     <div className="max-h-96 overflow-y-auto rounded-xl border border-slate-200 bg-white shadow-lg dark:border-slate-700 dark:bg-slate-900">
       <div className="flex items-center justify-between border-b border-slate-200 px-4 py-3 dark:border-slate-700">
-        <h3 className="font-semibold text-slate-900 dark:text-slate-100">Уведомления</h3>
+        <h3 className="font-semibold text-slate-900 dark:text-slate-100">{t("notifications")}</h3>
         <button
           className="text-xs text-cyan-600 transition hover:underline dark:text-cyan-400"
           onClick={() => markAllRead.mutate()}
         >
-          Прочитать все
+          {t("read_all")}
         </button>
       </div>
       <div className="divide-y divide-slate-200 dark:divide-slate-700">
@@ -70,16 +77,32 @@ export function NotificationList({ onClose }: NotificationListProps) {
         ))}
         {notifications.length === 0 && (
           <div className="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">
-            Уведомлений нет
+            {t("no_notifications")}
           </div>
         )}
       </div>
-      <div className="border-t border-slate-200 px-4 py-2 dark:border-slate-700">
+      <div className="flex items-center justify-between border-t border-slate-200 px-4 py-2 dark:border-slate-700">
+        <div className="flex gap-2">
+          <button
+            className="text-xs text-slate-500 transition hover:text-slate-700 disabled:opacity-50 dark:text-slate-400 dark:hover:text-slate-200"
+            onClick={() => setPage((p) => Math.max(1, p - 1))}
+            disabled={page === 1}
+          >
+            Назад
+          </button>
+          <button
+            className="text-xs text-slate-500 transition hover:text-slate-700 disabled:opacity-50 dark:text-slate-400 dark:hover:text-slate-200"
+            onClick={() => setPage((p) => p + 1)}
+            disabled={notifications.length < pageSize}
+          >
+            Далее
+          </button>
+        </div>
         <button
           className="text-xs text-slate-500 transition hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200"
           onClick={onClose}
         >
-          Закрыть
+          {t("close")}
         </button>
       </div>
     </div>

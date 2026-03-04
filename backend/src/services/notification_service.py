@@ -38,14 +38,18 @@ class NotificationService:
         return notification
 
     async def list_notifications(
-        self, user_id: UUID, unread_only: bool = False, limit: int = 50
+        self,
+        user_id: UUID,
+        unread_only: bool = False,
+        limit: int = 50,
+        offset: int = 0,
     ) -> list[Notification]:
         query = select(Notification).where(
             (Notification.user_id == user_id) | (Notification.is_broadcast.is_(True))
         )
         if unread_only:
             query = query.where(Notification.is_read.is_(False))
-        query = query.order_by(Notification.created_at.desc()).limit(limit)
+        query = query.order_by(Notification.created_at.desc()).limit(limit).offset(offset)
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
