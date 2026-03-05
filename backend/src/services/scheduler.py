@@ -3,17 +3,22 @@
 import asyncio
 import hashlib
 import logging
+import re
 import time
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+import asyncpg
 from croniter import croniter
+from sqlalchemy.engine import make_url
 
 from celery.exceptions import Retry
 from sqlalchemy import select, text
 from sqlalchemy.orm import selectinload
 
 from src.core.celery_app import celery_app
+from src.core.config import settings
 from src.core.tenant import set_tenant_schema
 from src.models.base import SystemSessionLocal
 from src.models.flow import Flow
@@ -37,6 +42,7 @@ import src.models.user  # noqa: F401
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
 logger = logging.getLogger(__name__)
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
 
 def _advisory_lock_id(identifier: str) -> int:
@@ -50,6 +56,84 @@ def _run_in_worker_loop(coro):
         _worker_loop = asyncio.new_event_loop()
         asyncio.set_event_loop(_worker_loop)
     return _worker_loop.run_until_complete(coro)
+
+
+def _normalize_table_identifier(raw_value: str | None, fallback: str = "table") -> str:
+    sanitized = re.sub(r"[^a-zA-Z0-9_]+", "_", (raw_value or "").strip()).strip("_").lower()
+    if not sanitized:
+        sanitized = fallback
+    if not sanitized:
+        return fallback
+    if sanitized[0].isdigit():
+        sanitized = f"t_{sanitized}"
+    return sanitized[:63]
+
+
+def _default_target_table_name(source_table: str) -> str:
+    base = source_table.strip().split("/")[-1]
+    if "." in base:
+        base = base.rsplit(".", 1)[0]
+    return _normalize_table_identifier(base, fallback="table")
+
+
+def _business_connection_kwargs() -> dict[str, object]:
+    url = make_url(settings.database_business_url)
+    return {
+        "host": url.host or "localhost",
+        "port": url.port or 5432,
+        "user": url.username or "gendwh",
+        "password": url.password or "",
+        "database": url.database or "gendwh_business",
+    }
+
+
+def _build_progress_probe_tables(flow: Flow, source_type: str) -> list[tuple[str, str]]:
+    refs: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(table_name: str) -> None:
+        schema = str(flow.target_schema or "").strip()
+        table = str(table_name or "").strip()
+        if not _IDENTIFIER_RE.fullmatch(schema) or not _IDENTIFIER_RE.fullmatch(table):
+            return
+        key = (schema, table)
+        if key in seen:
+            return
+        seen.add(key)
+        refs.append(key)
+
+    for flow_table in getattr(flow, "tables", []):
+        _add(flow_table.target_table)
+        if source_type == "postgres":
+            _add(flow_table.source_table)
+            _add(_default_target_table_name(flow_table.source_table))
+    return refs
+
+
+async def _fetch_tables_activity_total(
+    conn: asyncpg.Connection,
+    table_refs: list[tuple[str, str]],
+) -> int:
+    if not table_refs:
+        return 0
+    total = 0
+    for schema_name, table_name in table_refs:
+        row = await conn.fetchrow(
+            """
+            SELECT
+                COALESCE(n_tup_ins, 0)::bigint AS inserted,
+                COALESCE(n_tup_upd, 0)::bigint AS updated
+            FROM pg_stat_user_tables
+            WHERE schemaname = $1
+              AND relname = $2
+            """,
+            schema_name,
+            table_name,
+        )
+        if not row:
+            continue
+        total += int(row["inserted"] or 0) + int(row["updated"] or 0)
+    return total
 
 
 async def _commit_with_tenant(session, tenant_schema: str) -> None:
@@ -79,8 +163,18 @@ def execute_flow_run(self, run_id: str, flow_id: str, tenant_schema: str):
 
 
 def _next_schedule_run(schedule: Schedule, base_time: datetime) -> datetime | None:
+    timezone_name = str(schedule.timezone or "UTC").strip() or "UTC"
+    try:
+        timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError:
+        timezone = ZoneInfo("UTC")
+    base_local = base_time.astimezone(timezone)
+
     if schedule.schedule_type == "cron" and schedule.cron_expression:
-        return croniter(schedule.cron_expression, base_time).get_next(datetime)
+        next_local = croniter(schedule.cron_expression, base_local).get_next(datetime)
+        if next_local.tzinfo is None:
+            next_local = next_local.replace(tzinfo=timezone)
+        return next_local.astimezone(UTC)
     if schedule.schedule_type == "interval" and schedule.interval_minutes:
         return base_time + timedelta(minutes=int(schedule.interval_minutes))
     return None
@@ -114,6 +208,8 @@ async def _dispatch_due_schedules_async() -> dict:
                     Schedule.next_run_at.is_not(None),
                     Schedule.next_run_at <= now,
                     Flow.deleted_at.is_(None),
+                    Flow.source_deleted.is_(False),
+                    Flow.source_id.is_not(None),
                     Flow.status != "draft",
                 )
                 .with_for_update(skip_locked=True)
@@ -130,11 +226,18 @@ async def _dispatch_due_schedules_async() -> dict:
                     await _commit_with_tenant(session, tenant_schema)
                     continue
 
-                if await run_service.has_active_run(flow.id):
+                if await run_service.has_active_run(
+                    flow.id,
+                    finalize_stale=False,
+                ):
                     continue
 
                 try:
-                    run = await run_service.create_run(flow.id, triggered_by="scheduled")
+                    run = await run_service.create_run(
+                        flow.id,
+                        triggered_by="scheduled",
+                        auto_commit=False,
+                    )
                 except ValueError:
                     continue
 
@@ -143,7 +246,9 @@ async def _dispatch_due_schedules_async() -> dict:
                 await _commit_with_tenant(session, tenant_schema)
 
                 try:
-                    execute_flow_run.delay(str(run.id), str(flow.id), tenant_schema)
+                    task_result = execute_flow_run.delay(str(run.id), str(flow.id), tenant_schema)
+                    run.celery_task_id = task_result.id
+                    await _commit_with_tenant(session, tenant_schema)
                     dispatched += 1
                 except Exception as exc:
                     run.status = "failed"
@@ -180,12 +285,29 @@ async def _mark_run_and_flow_failed(
             tenant_schema,
         )
     if run:
+        if run.status == "cancelled":
+            if flow and flow.status == "running":
+                flow.status = "paused"
+                flow.status_reason = "Запуск остановлен пользователем."
+                flow.pause_requested = False
+            await session.commit()
+            return
         run.status = "failed"
         run.error_message = error_message[:2000]
         run.completed_at = datetime.now(UTC)
+        run.celery_task_id = None
     if flow:
-        flow.status = "failed"
-        flow.status_reason = error_message[:2000]
+        if flow.source_deleted or flow.source_id is None:
+            flow.status = "paused"
+            flow.status_reason = "Источник удален. Запуск заблокирован до ручного удаления потока."
+            flow.pause_requested = False
+        elif flow.pause_requested:
+            flow.status = "paused"
+            flow.status_reason = "Пауза применена после завершения запуска с ошибкой."
+            flow.pause_requested = False
+        else:
+            flow.status = "failed"
+            flow.status_reason = error_message[:2000]
     await session.commit()
 
 
@@ -206,10 +328,16 @@ async def _ensure_run_terminal_status_async(run_id: str, flow_id: str, tenant_sc
             run.status = "failed"
             run.error_message = fallback_error
             run.completed_at = datetime.now(UTC)
+            run.celery_task_id = None
 
             if flow and flow.status == "running":
-                flow.status = "failed"
-                flow.status_reason = fallback_error
+                if flow.pause_requested:
+                    flow.status = "paused"
+                    flow.status_reason = "Пауза применена после аварийного завершения запуска."
+                    flow.pause_requested = False
+                else:
+                    flow.status = "failed"
+                    flow.status_reason = fallback_error
 
             await session.commit()
             logger.warning(
@@ -234,12 +362,28 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
         run = run_result.scalar_one_or_none()
         if not run:
             return
+        if run.status == "cancelled":
+            return
+        task_id = getattr(task.request, "id", None)
+        if task_id and run.celery_task_id != task_id:
+            run.celery_task_id = task_id
+            await session.flush()
 
         flow_result = await session.execute(
             select(Flow).options(selectinload(Flow.tables)).where(Flow.id == flow_uuid)
         )
         flow = flow_result.scalar_one_or_none()
         if not flow:
+            return
+        if flow.source_deleted or flow.source_id is None:
+            run.status = "cancelled"
+            run.error_message = "Запуск остановлен: источник удален."
+            run.completed_at = datetime.now(UTC)
+            run.celery_task_id = None
+            flow.status = "paused"
+            flow.status_reason = "Источник удален. Запуск заблокирован до ручного удаления потока."
+            flow.pause_requested = False
+            await session.commit()
             return
 
         # Acquire advisory lock (T077)
@@ -276,11 +420,29 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
             )
             source = source_result.scalar_one_or_none()
             if not source or not source.credential:
-                run.status = "failed"
-                run.error_message = "Источник не найден или отсутствуют учетные данные"
-                run.completed_at = datetime.now(UTC)
-                flow.status = "failed"
-                flow.status_reason = run.error_message
+                await session.refresh(flow)
+                if flow.source_deleted or flow.source_id is None:
+                    run.status = "cancelled"
+                    run.error_message = "Запуск остановлен: источник удален."
+                    run.completed_at = datetime.now(UTC)
+                    run.celery_task_id = None
+                    flow.status = "paused"
+                    flow.status_reason = (
+                        "Источник удален. Запуск заблокирован до ручного удаления потока."
+                    )
+                    flow.pause_requested = False
+                else:
+                    run.status = "failed"
+                    run.error_message = "Источник не найден или отсутствуют учетные данные"
+                    run.completed_at = datetime.now(UTC)
+                    run.celery_task_id = None
+                    if flow.pause_requested:
+                        flow.status = "paused"
+                        flow.status_reason = "Пауза применена после завершения запуска с ошибкой."
+                        flow.pause_requested = False
+                    else:
+                        flow.status = "failed"
+                        flow.status_reason = run.error_message
                 await session.commit()
                 return
 
@@ -369,54 +531,128 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
                         )
 
             last_progress_commit_at = 0.0
+            last_persisted_records = int(run.records_processed or 0)
+            last_persisted_total = int(run.source_records_total) if run.source_records_total else None
 
             async def _on_progress(
                 records_processed: int,
                 source_total: int | None,
             ) -> None:
-                nonlocal last_progress_commit_at
-                changed = False
+                nonlocal last_progress_commit_at, last_persisted_records, last_persisted_total
 
                 processed_value = max(0, int(records_processed or 0))
-                if processed_value > int(run.records_processed or 0):
-                    run.records_processed = processed_value
-                    changed = True
+                total_value = int(source_total) if source_total is not None and source_total > 0 else None
 
-                if source_total is not None and source_total > 0:
-                    total_value = int(source_total)
-                    if int(run.source_records_total or 0) != total_value:
-                        run.source_records_total = total_value
-                        run.source_records_total_is_estimate = False
-                        changed = True
-
-                if not changed:
+                has_records_delta = processed_value > last_persisted_records
+                has_total_delta = total_value is not None and total_value != last_persisted_total
+                if not has_records_delta and not has_total_delta:
                     return
 
                 now_monotonic = time.monotonic()
                 if now_monotonic - last_progress_commit_at < 1.5:
                     return
-                last_progress_commit_at = now_monotonic
-                await _commit_with_tenant(session, tenant_schema)
+
+                async with SystemSessionLocal() as progress_session:
+                    await set_tenant_schema(progress_session, tenant_schema)
+                    progress_run = await progress_session.get(Run, run_uuid)
+                    if not progress_run:
+                        return
+
+                    changed = False
+                    if processed_value > int(progress_run.records_processed or 0):
+                        progress_run.records_processed = processed_value
+                        changed = True
+                    if total_value is not None and total_value != int(progress_run.source_records_total or 0):
+                        progress_run.source_records_total = total_value
+                        progress_run.source_records_total_is_estimate = False
+                        changed = True
+
+                    if not changed:
+                        return
+
+                    await progress_session.commit()
+                    last_progress_commit_at = now_monotonic
+                    last_persisted_records = max(last_persisted_records, processed_value)
+                    if total_value is not None:
+                        last_persisted_total = total_value
 
             state_id = f"{tenant_schema}_{flow_id}"
+            progress_probe_conn: asyncpg.Connection | None = None
+            progress_probe_stop: asyncio.Event | None = None
+            progress_probe_task: asyncio.Task | None = None
 
-            if source_type == "s3":
-                result = await run_s3_to_postgres(
-                    source_config=source_config,
-                    target_config=target_config,
-                    tables=tables,
-                    progress_callback=_on_progress,
-                )
-            else:
-                # Execute Meltano run for PostgreSQL source flows
-                result = await run_meltano_elt(
-                    source_config,
-                    target_config,
-                    state_id,
-                    tables=tables,
-                    source_type=source_type,
-                    progress_callback=_on_progress,
-                )
+            try:
+                if source_type == "postgres":
+                    probe_tables = _build_progress_probe_tables(flow, source_type)
+                    if probe_tables:
+                        try:
+                            progress_probe_conn = await asyncpg.connect(**_business_connection_kwargs())
+                            baseline_activity = await _fetch_tables_activity_total(progress_probe_conn, probe_tables)
+                            progress_probe_stop = asyncio.Event()
+
+                            async def _poll_target_activity() -> None:
+                                while progress_probe_stop and not progress_probe_stop.is_set():
+                                    current_activity = await _fetch_tables_activity_total(progress_probe_conn, probe_tables)
+                                    processed_delta = max(0, current_activity - baseline_activity)
+                                    await _on_progress(processed_delta, None)
+                                    try:
+                                        await asyncio.wait_for(progress_probe_stop.wait(), timeout=2.0)
+                                    except TimeoutError:
+                                        continue
+
+                            progress_probe_task = asyncio.create_task(_poll_target_activity())
+                        except Exception as exc:
+                            logger.warning(
+                                "Failed to initialize target progress probe for flow_id=%s run_id=%s: %s",
+                                flow_id,
+                                run_id,
+                                exc,
+                            )
+
+                if source_type == "s3":
+                    result = await run_s3_to_postgres(
+                        source_config=source_config,
+                        target_config=target_config,
+                        tables=tables,
+                        progress_callback=_on_progress,
+                    )
+                else:
+                    # Execute Meltano run for PostgreSQL source flows
+                    result = await run_meltano_elt(
+                        source_config,
+                        target_config,
+                        state_id,
+                        tables=tables,
+                        source_type=source_type,
+                        progress_callback=_on_progress,
+                    )
+            finally:
+                if progress_probe_stop:
+                    progress_probe_stop.set()
+                if progress_probe_task:
+                    try:
+                        await progress_probe_task
+                    except Exception as exc:
+                        logger.warning(
+                            "Target progress probe finished with error for flow_id=%s run_id=%s: %s",
+                            flow_id,
+                            run_id,
+                            exc,
+                        )
+                if progress_probe_conn:
+                    await progress_probe_conn.close()
+
+            await session.refresh(run)
+            await session.refresh(flow)
+
+            if run.status == "cancelled":
+                if flow.status == "running":
+                    flow.status = "paused"
+                    flow.status_reason = "Запуск остановлен пользователем."
+                    flow.pause_requested = False
+                run.celery_task_id = None
+                await session.commit()
+                return
 
             if result.success:
                 run.status = "success"
@@ -427,8 +663,13 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
                     run.source_records_total = int(result_source_total)
                     run.source_records_total_is_estimate = False
                 run.meltano_state_file = result.state_file
-                flow.status = "success"
-                flow.status_reason = None
+                if flow.pause_requested:
+                    flow.status = "paused"
+                    flow.status_reason = "Пауза применена после завершения текущего запуска."
+                    flow.pause_requested = False
+                else:
+                    flow.status = "success"
+                    flow.status_reason = None
             else:
                 # Retry logic (T078)
                 non_retryable_markers = (
@@ -451,10 +692,16 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
 
                 run.status = "failed"
                 run.error_message = result.error_message
-                flow.status = "failed"
-                flow.status_reason = result.error_message
+                if flow.pause_requested:
+                    flow.status = "paused"
+                    flow.status_reason = "Пауза применена после завершения запуска с ошибкой."
+                    flow.pause_requested = False
+                else:
+                    flow.status = "failed"
+                    flow.status_reason = result.error_message
 
             run.completed_at = datetime.now(UTC)
+            run.celery_task_id = None
             await session.commit()
         except Retry:
             raise

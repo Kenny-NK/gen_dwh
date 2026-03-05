@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime
 from uuid import UUID
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
 from sqlalchemy import select
@@ -30,6 +31,7 @@ class ScheduleService:
         max_retries: int = 5,
         timeout_minutes: int = 120,
         created_by: UUID | None = None,
+        auto_commit: bool = True,
     ) -> Schedule:
         if schedule_type not in {"cron", "interval", "manual"}:
             raise ValueError("schedule_type must be one of: cron, interval, manual")
@@ -37,6 +39,7 @@ class ScheduleService:
             raise ValueError("cron_expression is required for cron schedules")
         if schedule_type == "interval" and not interval_minutes:
             raise ValueError("interval_minutes is required for interval schedules")
+        timezone_obj = self._resolve_timezone(timezone)
 
         schedule = await self.get_schedule(flow_id)
 
@@ -62,7 +65,10 @@ class ScheduleService:
 
         # Calculate next run
         if schedule_type == "cron" and cron_expression:
-            schedule.next_run_at = self._get_next_cron_time(cron_expression)
+            schedule.next_run_at = self._get_next_cron_time(
+                cron_expression,
+                timezone_obj,
+            )
         elif schedule_type == "interval" and interval_minutes:
             from datetime import timedelta
 
@@ -71,15 +77,17 @@ class ScheduleService:
             schedule.next_run_at = None
 
         await self.session.flush()
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return schedule
 
-    async def delete_schedule(self, flow_id: UUID) -> bool:
+    async def delete_schedule(self, flow_id: UUID, auto_commit: bool = True) -> bool:
         schedule = await self.get_schedule(flow_id)
         if not schedule:
             return False
         await self.session.delete(schedule)
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return True
 
     async def list_schedules(
@@ -106,5 +114,17 @@ class ScheduleService:
             return {"valid": False, "error": str(e)}
 
     @staticmethod
-    def _get_next_cron_time(expression: str) -> datetime:
-        return croniter(expression).get_next(datetime)
+    def _resolve_timezone(timezone: str) -> ZoneInfo:
+        timezone_name = str(timezone or "").strip() or "UTC"
+        try:
+            return ZoneInfo(timezone_name)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(f"Некорректный timezone: {timezone_name}") from exc
+
+    @staticmethod
+    def _get_next_cron_time(expression: str, timezone: ZoneInfo) -> datetime:
+        base_local = datetime.now(UTC).astimezone(timezone)
+        next_local = croniter(expression, base_local).get_next(datetime)
+        if next_local.tzinfo is None:
+            next_local = next_local.replace(tzinfo=timezone)
+        return next_local.astimezone(UTC)

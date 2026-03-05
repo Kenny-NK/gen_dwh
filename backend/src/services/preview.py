@@ -110,6 +110,7 @@ class PreviewService:
             return {"rows": [], "total": 0}
 
         flow_table = self._resolve_flow_table(flow, table)
+        self._ensure_table_allowed(preview, flow_table, table)
         if str(flow.source.source_type or "").lower() == "s3":
             return await self._get_s3_preview_data(
                 flow=flow,
@@ -202,6 +203,23 @@ class PreviewService:
             if ft.source_table == lookup:
                 return ft
         raise ValueError("Table not configured in flow")
+
+    @staticmethod
+    def _ensure_table_allowed(
+        preview: PreviewSession,
+        flow_table: FlowTable,
+        requested_table: str,
+    ) -> None:
+        allowed_raw = preview.tables_available or []
+        allowed = {str(item) for item in allowed_raw if str(item).strip()}
+        if not allowed:
+            return
+
+        full_name = f"{flow_table.source_schema}.{flow_table.source_table}"
+        if requested_table in allowed or full_name in allowed or flow_table.source_table in allowed:
+            return
+
+        raise ValueError("Table not allowed in this preview session")
 
     async def _get_s3_preview_data(
         self,

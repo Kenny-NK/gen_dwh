@@ -35,7 +35,6 @@ class AuditService:
         )
         self.session.add(event)
         await self.session.flush()
-        await self.session.commit()
         return event
 
     async def list_events(

@@ -70,6 +70,7 @@ class FlowService:
         target_table_prefix: str | None = None,
         upsert_key: str | None = None,
         created_by: UUID | None = None,
+        auto_commit: bool = True,
     ) -> Flow:
         source_exists = await self.session.execute(
             select(Source.id).where(
@@ -93,10 +94,11 @@ class FlowService:
         )
         self.session.add(flow)
         await self.session.flush()
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return flow
 
-    async def update_flow(self, flow_id: UUID, **kwargs) -> Flow | None:
+    async def update_flow(self, flow_id: UUID, auto_commit: bool = True, **kwargs) -> Flow | None:
         flow = await self.get_flow(flow_id)
         if not flow:
             return None
@@ -107,17 +109,24 @@ class FlowService:
             if hasattr(flow, key):
                 setattr(flow, key, value)
         await self.session.flush()
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return flow
 
-    async def delete_flow(self, flow_id: UUID, drop_target_tables: bool = False) -> bool:
+    async def delete_flow(
+        self,
+        flow_id: UUID,
+        drop_target_tables: bool = False,
+        auto_commit: bool = True,
+    ) -> bool:
         flow = await self.get_flow(flow_id)
         if not flow:
             return False
         if drop_target_tables:
             await self._drop_flow_target_tables(flow)
         flow.deleted_at = datetime.now(UTC)
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return True
 
     async def add_table(
@@ -129,6 +138,7 @@ class FlowService:
         replication_method: str = "FULL_TABLE",
         replication_key: str | None = None,
         selected_columns: list[str] | None = None,
+        auto_commit: bool = True,
     ) -> FlowTable:
         flow = await self.get_flow(flow_id)
         if not flow:
@@ -157,7 +167,8 @@ class FlowService:
         self.session.add(flow_table)
         try:
             await self.session.flush()
-            await self.session.commit()
+            if auto_commit:
+                await self.session.commit()
         except IntegrityError as exc:
             await self.session.rollback()
             if "flow_id" in str(exc).lower() and "source_schema" in str(exc).lower():
@@ -195,6 +206,7 @@ class FlowService:
         return FlowService._normalize_table_identifier(f"{prefix}_{base}", fallback=base)
 
     async def update_table(self, table_id: UUID, **kwargs) -> FlowTable | None:
+        auto_commit = kwargs.pop("auto_commit", True)
         flow_id = kwargs.pop("flow_id", None)
         query = select(FlowTable).where(FlowTable.id == table_id)
         if flow_id:
@@ -207,7 +219,8 @@ class FlowService:
             if hasattr(flow_table, key):
                 setattr(flow_table, key, value)
         await self.session.flush()
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return flow_table
 
     async def remove_table(
@@ -215,6 +228,7 @@ class FlowService:
         table_id: UUID,
         flow_id: UUID | None = None,
         drop_target_table: bool = False,
+        auto_commit: bool = True,
     ) -> bool:
         query = select(FlowTable).where(FlowTable.id == table_id)
         if flow_id:
@@ -233,16 +247,18 @@ class FlowService:
             if flow:
                 await self._drop_flow_table_targets(flow, flow_table)
         await self.session.delete(flow_table)
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return True
 
-    async def activate_flow(self, flow_id: UUID) -> Flow | None:
+    async def activate_flow(self, flow_id: UUID, auto_commit: bool = True) -> Flow | None:
         flow = await self.get_flow(flow_id)
         if not flow or flow.status != "draft":
             return None
         flow.status = "paused"
         await self.session.flush()
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return flow
 
     @staticmethod

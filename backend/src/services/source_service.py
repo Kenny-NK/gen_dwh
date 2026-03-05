@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.models.flow import Flow
+from src.models.schedule import Schedule
 from src.models.source import Source
 from src.models.source_credential import SourceCredential
 from src.services.connection import (
@@ -16,6 +17,7 @@ from src.services.connection import (
     test_connection,
     test_s3_connection,
 )
+from src.services.run_service import RunService
 
 
 class SourceService:
@@ -55,6 +57,7 @@ class SourceService:
         password: str,
         description: str | None = None,
         created_by: UUID | None = None,
+        auto_commit: bool = True,
     ) -> Source:
         normalized_source_type = (source_type or "postgres").lower()
         source = Source(
@@ -90,11 +93,12 @@ class SourceService:
             source.validation_error = result.message
 
         await self.session.flush()
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return source
 
     async def update_source(
-        self, source_id: UUID, **kwargs
+        self, source_id: UUID, auto_commit: bool = True, **kwargs
     ) -> Source | None:
         source = await self.get_source(source_id)
         if not source:
@@ -163,18 +167,59 @@ class SourceService:
             )
 
         await self.session.flush()
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
         return source
 
-    async def delete_source(self, source_id: UUID) -> bool:
+    async def delete_source(self, source_id: UUID, auto_commit: bool = True) -> bool:
         source = await self.get_source(source_id)
         if not source:
             return False
-        source.deleted_at = datetime.now(UTC)
-        await self.session.commit()
+
+        flows_result = await self.session.execute(
+            select(Flow.id).where(
+                Flow.source_id == source_id,
+                Flow.deleted_at.is_(None),
+            )
+        )
+        flow_ids = [row[0] for row in flows_result.all()]
+
+        if flow_ids:
+            await RunService(self.session).cancel_active_runs_for_flows(
+                flow_ids=flow_ids,
+                reason="Запуск остановлен: источник удален.",
+            )
+
+        await self.session.execute(
+            update(Flow)
+            .where(
+                Flow.source_id == source_id,
+                Flow.deleted_at.is_(None),
+            )
+            .values(
+                source_id=None,
+                source_deleted=True,
+                pause_requested=False,
+                status="paused",
+                status_reason="Источник удален. Запуск заблокирован до ручного удаления потока.",
+            )
+        )
+        if flow_ids:
+            await self.session.execute(
+                update(Schedule)
+                .where(Schedule.flow_id.in_(flow_ids))
+                .values(
+                    is_active=False,
+                    next_run_at=None,
+                )
+            )
+
+        await self.session.delete(source)
+        if auto_commit:
+            await self.session.commit()
         return True
 
-    async def test_source_connection(self, source_id: UUID) -> dict:
+    async def test_source_connection(self, source_id: UUID, auto_commit: bool = True) -> dict:
         source = await self.get_source(source_id)
         if not source or not source.credential:
             return {"success": False, "message": "Источник не найден"}
@@ -200,7 +245,8 @@ class SourceService:
         source.connection_status = "valid" if result.success else "invalid"
         source.last_validated_at = datetime.now(UTC)
         source.validation_error = None if result.success else result.message
-        await self.session.commit()
+        if auto_commit:
+            await self.session.commit()
 
         return {
             "success": result.success,

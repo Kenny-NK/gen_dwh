@@ -37,5 +37,7 @@ async def health_check() -> dict:
 
     # Check Meltano CLI availability
     checks["meltano"] = "ok" if shutil.which("meltano") else "missing"
+    if checks["meltano"] == "missing":
+        checks["status"] = "unhealthy"
 
     return checks
