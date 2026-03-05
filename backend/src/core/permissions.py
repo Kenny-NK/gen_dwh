@@ -29,7 +29,6 @@ ROLE_PERMISSIONS: dict[str, set[Permission]] = {
         Permission.FLOWS_RUN,
         Permission.PREVIEW_READ,
         Permission.SCHEDULES_READ,
-        Permission.SCHEDULES_WRITE,
     },
 }
 
@@ -81,8 +80,18 @@ def require_permission(permission: Permission) -> Callable:
     """Dependency factory that checks if the current user has a specific permission."""
 
     def checker(current_user: dict) -> dict:
-        user_role = current_user.get("role", "user")
-        user_perms = get_permissions_for_role(user_role)
+        declared_permissions = {
+            str(item) for item in current_user.get("permissions", [])
+        }
+        if declared_permissions:
+            user_perms = {
+                permission
+                for permission in Permission
+                if str(permission) in declared_permissions
+            }
+        else:
+            user_role = current_user.get("role", "user")
+            user_perms = get_permissions_for_role(user_role)
         if permission not in user_perms:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,

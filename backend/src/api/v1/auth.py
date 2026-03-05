@@ -2,13 +2,15 @@
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_tenant_db
+from src.api.deps import get_current_actor_id, get_tenant_db
 from src.core.config import settings
 from src.core.tenant import get_current_tenant_id
 from src.core.security import KeycloakUnavailableError, decode_jwt
 from src.middleware.auth import get_current_user
+from src.models.tenant import Tenant
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 security = HTTPBearer(auto_error=False)
@@ -71,16 +73,46 @@ async def clear_session(response: Response) -> dict:
 @router.get("/me")
 async def get_me(
     db: AsyncSession = Depends(get_tenant_db),
+    actor_id = Depends(get_current_actor_id),
     current_user: dict = Depends(get_current_user),
 ) -> dict:
     """Get current user information."""
     _ = db
     tenant_id = current_user.get("tenant_id") or get_current_tenant_id()
     return {
-        "id": current_user["sub"],
+        "id": str(actor_id) if actor_id else current_user["sub"],
         "email": current_user["email"],
         "role": current_user["role"],
         "roles": current_user.get("roles", []),
         "tenant_id": str(tenant_id) if tenant_id else None,
         "permissions": current_user.get("permissions", []),
+    }
+
+
+@router.get("/tenant")
+async def get_tenant(
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    tenant_id = current_user.get("tenant_id") or get_current_tenant_id()
+    if not tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Арендатор не найден")
+    result = await db.execute(
+        select(Tenant.id, Tenant.subdomain, Tenant.name, Tenant.is_active).where(Tenant.id == tenant_id)
+    )
+    tenant = result.one_or_none()
+    if not tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Арендатор не найден")
+
+    tenant_row_id, subdomain, name, is_active = tenant
+    return {
+        "id": str(tenant_row_id),
+        "subdomain": subdomain,
+        "name": name,
+        "is_active": is_active,
+        "features": {
+            "max_sources": None,
+            "max_flows": None,
+            "max_concurrent_runs": None,
+        },
     }

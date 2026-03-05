@@ -8,10 +8,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_current_actor_id, get_tenant_db
 from src.api.audit_utils import log_audit_event
-from src.middleware.auth import get_current_user
+from src.api.deps import get_current_actor_id, get_tenant_db, require_permission
 from src.core.config import settings
+from src.core.permissions import Permission
+from src.middleware.auth import get_current_user
 from src.services.connection import decrypt_password, discover_s3_objects, discover_schemas, discover_tables
 from src.services.source_service import SourceService
 
@@ -60,6 +61,11 @@ class SourceResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SourceListResponse(BaseModel):
+    items: list[SourceResponse]
+    total: int
+
+
 # --- Endpoints ---
 
 @router.get("")
@@ -68,12 +74,16 @@ async def list_sources(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_tenant_db),
+    _: None = Depends(require_permission(Permission.SOURCES_READ)),
     current_user: dict = Depends(get_current_user),
-) -> list[SourceResponse]:
+) -> SourceListResponse:
     """List all sources (T041)."""
     service = SourceService(db)
     sources = await service.list_sources(status=status_filter, limit=limit, offset=offset)
-    return [SourceResponse.model_validate(s) for s in sources]
+    return SourceListResponse(
+        items=[SourceResponse.model_validate(s) for s in sources],
+        total=len(sources),
+    )
 
 
 @router.post("", status_code=status.HTTP_201_CREATED)
@@ -82,31 +92,38 @@ async def create_source(
     request: Request,
     db: AsyncSession = Depends(get_tenant_db),
     actor_id: UUID | None = Depends(get_current_actor_id),
+    _: None = Depends(require_permission(Permission.SOURCES_WRITE)),
     current_user: dict = Depends(get_current_user),
 ) -> SourceResponse:
     """Create a new source connection (T041)."""
     service = SourceService(db)
-    source = await service.create_source(
-        name=body.name,
-        source_type=body.source_type,
-        host=body.host,
-        port=body.port,
-        database=body.database,
-        username=body.username,
-        password=body.password,
-        description=body.description,
-        created_by=actor_id,
-    )
-    await log_audit_event(
-        db=db,
-        request=request,
-        action="create",
-        entity_type="source",
-        entity_id=source.id,
-        user_id=actor_id,
-        user_email=current_user.get("email"),
-        changes={"name": source.name, "host": source.host, "database": source.database},
-    )
+    try:
+        source = await service.create_source(
+            name=body.name,
+            source_type=body.source_type,
+            host=body.host,
+            port=body.port,
+            database=body.database,
+            username=body.username,
+            password=body.password,
+            description=body.description,
+            created_by=actor_id,
+            auto_commit=False,
+        )
+        await log_audit_event(
+            db=db,
+            request=request,
+            action="create",
+            entity_type="source",
+            entity_id=source.id,
+            user_id=actor_id,
+            user_email=current_user.get("email"),
+            changes={"name": source.name, "host": source.host, "database": source.database},
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     return SourceResponse.model_validate(source)
 
 
@@ -114,6 +131,7 @@ async def create_source(
 async def get_source(
     source_id: UUID,
     db: AsyncSession = Depends(get_tenant_db),
+    _: None = Depends(require_permission(Permission.SOURCES_READ)),
     current_user: dict = Depends(get_current_user),
 ) -> SourceResponse:
     """Get source details (T041)."""
@@ -131,24 +149,33 @@ async def update_source(
     request: Request,
     db: AsyncSession = Depends(get_tenant_db),
     actor_id: UUID | None = Depends(get_current_actor_id),
+    _: None = Depends(require_permission(Permission.SOURCES_WRITE)),
     current_user: dict = Depends(get_current_user),
 ) -> SourceResponse:
     """Update source configuration (T041)."""
     service = SourceService(db)
     updates = body.model_dump(exclude_unset=True)
-    source = await service.update_source(source_id, **updates)
-    if not source:
-        raise HTTPException(status_code=404, detail="Источник не найден")
-    await log_audit_event(
-        db=db,
-        request=request,
-        action="update",
-        entity_type="source",
-        entity_id=source.id,
-        user_id=actor_id,
-        user_email=current_user.get("email"),
-        changes=updates,
-    )
+    try:
+        source = await service.update_source(source_id, auto_commit=False, **updates)
+        if not source:
+            await db.rollback()
+            raise HTTPException(status_code=404, detail="Источник не найден")
+        await log_audit_event(
+            db=db,
+            request=request,
+            action="update",
+            entity_type="source",
+            entity_id=source.id,
+            user_id=actor_id,
+            user_email=current_user.get("email"),
+            changes=updates,
+        )
+        await db.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        await db.rollback()
+        raise
     return SourceResponse.model_validate(source)
 
 
@@ -158,22 +185,31 @@ async def delete_source(
     request: Request,
     db: AsyncSession = Depends(get_tenant_db),
     actor_id: UUID | None = Depends(get_current_actor_id),
+    _: None = Depends(require_permission(Permission.SOURCES_WRITE)),
     current_user: dict = Depends(get_current_user),
 ) -> None:
     """Soft-delete a source (T041)."""
     service = SourceService(db)
-    deleted = await service.delete_source(source_id)
-    if not deleted:
-        raise HTTPException(status_code=404, detail="Источник не найден")
-    await log_audit_event(
-        db=db,
-        request=request,
-        action="delete",
-        entity_type="source",
-        entity_id=source_id,
-        user_id=actor_id,
-        user_email=current_user.get("email"),
-    )
+    try:
+        deleted = await service.delete_source(source_id, auto_commit=False)
+        if not deleted:
+            await db.rollback()
+            raise HTTPException(status_code=404, detail="Источник не найден")
+        await log_audit_event(
+            db=db,
+            request=request,
+            action="delete",
+            entity_type="source",
+            entity_id=source_id,
+            user_id=actor_id,
+            user_email=current_user.get("email"),
+        )
+        await db.commit()
+    except HTTPException:
+        raise
+    except Exception:
+        await db.rollback()
+        raise
 
 
 @router.post("/{source_id}/test")
@@ -182,21 +218,27 @@ async def test_source_connection(
     request: Request,
     db: AsyncSession = Depends(get_tenant_db),
     actor_id: UUID | None = Depends(get_current_actor_id),
+    _: None = Depends(require_permission(Permission.SOURCES_WRITE)),
     current_user: dict = Depends(get_current_user),
 ) -> dict:
     """Test source connection (T042)."""
     service = SourceService(db)
-    result = await service.test_source_connection(source_id)
-    await log_audit_event(
-        db=db,
-        request=request,
-        action="test_connection",
-        entity_type="source",
-        entity_id=source_id,
-        user_id=actor_id,
-        user_email=current_user.get("email"),
-        changes={"success": result.get("success")},
-    )
+    try:
+        result = await service.test_source_connection(source_id, auto_commit=False)
+        await log_audit_event(
+            db=db,
+            request=request,
+            action="test_connection",
+            entity_type="source",
+            entity_id=source_id,
+            user_id=actor_id,
+            user_email=current_user.get("email"),
+            changes={"success": result.get("success")},
+        )
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        raise
     return result
 
 
@@ -204,8 +246,9 @@ async def test_source_connection(
 async def get_source_schemas(
     source_id: UUID,
     db: AsyncSession = Depends(get_tenant_db),
+    _: None = Depends(require_permission(Permission.SOURCES_READ)),
     current_user: dict = Depends(get_current_user),
-) -> list[str]:
+) -> dict:
     """Discover available schemas in source database (T043)."""
     service = SourceService(db)
     source = await service.get_source(source_id)
@@ -215,10 +258,10 @@ async def get_source_schemas(
     try:
         password = await decrypt_password(db, source.credential.password_encrypted)
         if source.source_type == "s3":
-            return [source.database]
-        return await discover_schemas(
+            return {"schemas": [source.database]}
+        return {"schemas": await discover_schemas(
             source.host, source.port, source.database, source.username, password
-        )
+        )}
     except Exception as exc:
         detail = "Не удалось получить список схем источника"
         if settings.debug:
@@ -234,8 +277,9 @@ async def get_source_tables(
     source_id: UUID,
     schema_name: str,
     db: AsyncSession = Depends(get_tenant_db),
+    _: None = Depends(require_permission(Permission.SOURCES_READ)),
     current_user: dict = Depends(get_current_user),
-) -> list[dict]:
+) -> dict:
     """Discover tables in a source schema (T044)."""
     service = SourceService(db)
     source = await service.get_source(source_id)
@@ -247,16 +291,18 @@ async def get_source_tables(
         if source.source_type == "s3":
             if schema_name != source.database:
                 raise HTTPException(status_code=404, detail="Бакет не найден")
-            return await discover_s3_objects(
+            return {"tables": await discover_s3_objects(
                 source.host,
                 source.port,
                 source.database,
                 source.username,
                 password,
-            )
-        return await discover_tables(
+            )}
+        return {"tables": await discover_tables(
             source.host, source.port, source.database, source.username, password, schema_name
-        )
+        )}
+    except HTTPException:
+        raise
     except Exception as exc:
         detail = f"Не удалось получить таблицы схемы {schema_name}"
         if settings.debug:

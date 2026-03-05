@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_tenant_db
+from src.api.deps import get_tenant_db, require_permission
+from src.core.permissions import Permission
 from src.middleware.auth import get_current_user
 from src.services.flow_service import FlowService
 from src.services.masking import mask_row
@@ -41,6 +42,7 @@ async def start_preview(
     flow_id: UUID,
     body: PreviewRequest,
     db: AsyncSession = Depends(get_tenant_db),
+    _: None = Depends(require_permission(Permission.PREVIEW_READ)),
     current_user: dict = Depends(get_current_user),
 ) -> PreviewSessionResponse:
     """Start a preview session (T061)."""
@@ -76,6 +78,7 @@ async def get_preview_status(
     flow_id: UUID,
     session_id: UUID,
     db: AsyncSession = Depends(get_tenant_db),
+    _: None = Depends(require_permission(Permission.PREVIEW_READ)),
     current_user: dict = Depends(get_current_user),
 ) -> PreviewSessionResponse:
     """Get preview session status (T061)."""
@@ -96,6 +99,7 @@ async def get_preview_data(
     sort_by: str | None = None,
     sort_order: str = Query("asc", pattern="^(asc|desc)$"),
     db: AsyncSession = Depends(get_tenant_db),
+    _: None = Depends(require_permission(Permission.PREVIEW_READ)),
     current_user: dict = Depends(get_current_user),
 ) -> dict:
     """Get preview data with masking (T061, T062)."""
@@ -111,7 +115,8 @@ async def get_preview_data(
         raise HTTPException(status_code=400, detail=str(exc))
 
     # Apply masking for non-admin users
-    if current_user.get("role") != "admin":
+    user_permissions = {str(value) for value in current_user.get("permissions", [])}
+    if str(Permission.PII_UNMASKED) not in user_permissions:
         # Get sensitive columns from flow table config
         flow_service = FlowService(db)
         flow = await flow_service.get_flow(flow_id)

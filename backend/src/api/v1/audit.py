@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from src.api.deps import get_tenant_db
+from src.api.deps import get_tenant_db, require_permission
+from src.core.permissions import Permission
 from src.middleware.auth import get_current_user
 from src.services.audit_service import AuditService
 
@@ -35,11 +36,9 @@ async def list_audit_events(
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_tenant_db),
+    _: None = Depends(require_permission(Permission.AUDIT_READ)),
     current_user: dict = Depends(get_current_user),
 ) -> list[AuditEventResponse]:
-    if current_user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Требуются права администратора")
-
     service = AuditService(db)
     events = await service.list_events(
         entity_type=entity_type, entity_id=entity_id, limit=limit, offset=offset
