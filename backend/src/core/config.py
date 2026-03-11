@@ -1,5 +1,6 @@
 """Application configuration module (T015)."""
 
+from pathlib import Path
 from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
@@ -16,6 +17,27 @@ class Settings(BaseSettings):
     jwks_cache_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
     http_client_timeout_seconds: float = Field(default=5.0, gt=0.1, le=60.0)
     external_ca_bundle_path: str = ""
+    jira_client_cert_path: str = ""
+    jira_client_key_path: str = ""
+    jira_client_cert_password: str = ""
+    jira_client_cert_password_file: str = ""
+    vault_addr: str = ""
+    vault_auth_method: str = "token"
+    vault_token: str = ""
+    vault_token_file: str = ""
+    vault_approle_mount: str = "approle"
+    vault_role_id: str = ""
+    vault_role_id_file: str = ""
+    vault_secret_id: str = ""
+    vault_secret_id_file: str = ""
+    vault_kv_mount: str = "secret"
+    vault_kv_version: str = "v2"
+    vault_jira_client_cert_secret_path: str = ""
+    vault_jira_client_cert_field: str = "p12_base64"
+    vault_jira_client_cert_password_field: str = "password"
+    vault_jira_client_cert_filename_field: str = "filename"
+    vault_jira_client_cert_pem_field: str = "cert_pem"
+    vault_jira_client_key_field: str = "key_pem"
     external_service_failure_threshold: int = Field(default=5, ge=1, le=20)
     external_service_cooldown_seconds: int = Field(default=60, ge=5, le=3_600)
     meltano_command_timeout_seconds: int = Field(default=3600, ge=60, le=86_400)
@@ -74,6 +96,42 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def validate_security_settings(self) -> "Settings":
+        if not self.jira_client_cert_password and self.jira_client_cert_password_file:
+            secret_path = Path(self.jira_client_cert_password_file)
+            if not secret_path.is_file():
+                raise ValueError("JIRA_CLIENT_CERT_PASSWORD_FILE must point to an existing file")
+            password = secret_path.read_text(encoding="utf-8").strip()
+            if not password:
+                raise ValueError("JIRA_CLIENT_CERT_PASSWORD_FILE must not be empty")
+            self.jira_client_cert_password = password
+
+        if not self.vault_token and self.vault_token_file:
+            token_path = Path(self.vault_token_file)
+            if not token_path.is_file():
+                raise ValueError("VAULT_TOKEN_FILE must point to an existing file")
+            token = token_path.read_text(encoding="utf-8").strip()
+            if not token:
+                raise ValueError("VAULT_TOKEN_FILE must not be empty")
+            self.vault_token = token
+
+        if not self.vault_role_id and self.vault_role_id_file:
+            role_id_path = Path(self.vault_role_id_file)
+            if not role_id_path.is_file():
+                raise ValueError("VAULT_ROLE_ID_FILE must point to an existing file")
+            role_id = role_id_path.read_text(encoding="utf-8").strip()
+            if not role_id:
+                raise ValueError("VAULT_ROLE_ID_FILE must not be empty")
+            self.vault_role_id = role_id
+
+        if not self.vault_secret_id and self.vault_secret_id_file:
+            secret_id_path = Path(self.vault_secret_id_file)
+            if not secret_id_path.is_file():
+                raise ValueError("VAULT_SECRET_ID_FILE must point to an existing file")
+            secret_id = secret_id_path.read_text(encoding="utf-8").strip()
+            if not secret_id:
+                raise ValueError("VAULT_SECRET_ID_FILE must not be empty")
+            self.vault_secret_id = secret_id
+
         if len(self.db_encryption_key) < 16:
             raise ValueError("DB_ENCRYPTION_KEY must be at least 16 characters long")
 
@@ -105,6 +163,12 @@ class Settings(BaseSettings):
 
         if self.preview_default_mode.lower() not in {"auto", "live", "snapshot"}:
             raise ValueError("PREVIEW_DEFAULT_MODE must be one of: auto, live, snapshot")
+
+        if self.vault_kv_version.lower() not in {"v1", "v2"}:
+            raise ValueError("VAULT_KV_VERSION must be one of: v1, v2")
+
+        if self.vault_auth_method.lower() not in {"token", "approle"}:
+            raise ValueError("VAULT_AUTH_METHOD must be one of: token, approle")
 
         return self
 

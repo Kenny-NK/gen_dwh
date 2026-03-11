@@ -78,6 +78,52 @@ services:
       timeout: 5s
       retries: 5
 
+  vault:
+    image: hashicorp/vault:1.19
+    container_name: gendwh-vault
+    restart: unless-stopped
+    mem_limit: 256m
+    cpus: 0.5
+    cap_add:
+      - IPC_LOCK
+    command: server -dev -dev-root-token-id=${VAULT_DEV_ROOT_TOKEN}
+    environment:
+      VAULT_DEV_LISTEN_ADDRESS: 0.0.0.0:8200
+    ports:
+      - "8200:8200"
+    healthcheck:
+      test: ["CMD-SHELL", "VAULT_ADDR=http://127.0.0.1:8200 vault status >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  vault-init:
+    image: hashicorp/vault:1.19
+    container_name: gendwh-vault-init
+    entrypoint: ["/bin/sh", "/opt/vault-init/init-vault.sh"]
+    environment:
+      VAULT_ADDR: http://vault:8200
+      VAULT_ROOT_TOKEN_FILE: /opt/gendwh/secrets/vault_token
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
+      VAULT_KV_VERSION: ${VAULT_KV_VERSION:-v2}
+      VAULT_APPROLE_MOUNT: ${VAULT_APPROLE_MOUNT:-approle}
+      VAULT_APPROLE_NAME: ${VAULT_APPROLE_NAME:-gendwh-jira-client}
+      VAULT_APPROLE_POLICY_NAME: ${VAULT_APPROLE_POLICY_NAME:-gendwh-jira-client}
+      VAULT_APPROLE_ROLE_ID_FILE: /opt/gendwh/secrets/vault_role_id
+      VAULT_APPROLE_SECRET_ID_FILE: /opt/gendwh/secrets/vault_secret_id
+      VAULT_JIRA_CLIENT_CERT_SECRET_PATH: ${VAULT_JIRA_CLIENT_CERT_SECRET_PATH:-gendwh/jira/client-cert}
+      VAULT_BOOTSTRAP_JIRA_CLIENT_CERT_FILE: ${VAULT_BOOTSTRAP_JIRA_CLIENT_CERT_FILE:-/opt/gendwh/certs/23544956.p12}
+      VAULT_BOOTSTRAP_JIRA_CLIENT_CERT_PASSWORD_FILE: ${VAULT_BOOTSTRAP_JIRA_CLIENT_CERT_PASSWORD_FILE:-/opt/gendwh/secrets/jira_client_cert_password}
+    volumes:
+      - ./vault/init-vault.sh:/opt/vault-init/init-vault.sh:ro
+      - ./certs:/opt/gendwh/certs:ro
+      - ./secrets:/opt/gendwh/secrets
+    depends_on:
+      vault:
+        condition: service_healthy
+    restart: "no"
+
   keycloak:
     image: quay.io/keycloak/keycloak:24.0
     container_name: gendwh-keycloak
@@ -138,12 +184,37 @@ services:
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/gendwh}
+      EXTERNAL_CA_BUNDLE_PATH: ${EXTERNAL_CA_BUNDLE_PATH:-}
+      JIRA_CLIENT_CERT_PATH: ${JIRA_CLIENT_CERT_PATH:-}
+      JIRA_CLIENT_KEY_PATH: ${JIRA_CLIENT_KEY_PATH:-}
+      JIRA_CLIENT_CERT_PASSWORD: ${JIRA_CLIENT_CERT_PASSWORD:-}
+      JIRA_CLIENT_CERT_PASSWORD_FILE: ${JIRA_CLIENT_CERT_PASSWORD_FILE:-}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_AUTH_METHOD: ${VAULT_AUTH_METHOD:-approle}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      VAULT_TOKEN_FILE: ${VAULT_TOKEN_FILE:-}
+      VAULT_APPROLE_MOUNT: ${VAULT_APPROLE_MOUNT:-approle}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_ROLE_ID_FILE: ${VAULT_ROLE_ID_FILE:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      VAULT_SECRET_ID_FILE: ${VAULT_SECRET_ID_FILE:-}
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
+      VAULT_KV_VERSION: ${VAULT_KV_VERSION:-v2}
+      VAULT_JIRA_CLIENT_CERT_SECRET_PATH: ${VAULT_JIRA_CLIENT_CERT_SECRET_PATH:-}
+      VAULT_JIRA_CLIENT_CERT_FIELD: ${VAULT_JIRA_CLIENT_CERT_FIELD:-p12_base64}
+      VAULT_JIRA_CLIENT_CERT_PASSWORD_FIELD: ${VAULT_JIRA_CLIENT_CERT_PASSWORD_FIELD:-password}
+      VAULT_JIRA_CLIENT_CERT_FILENAME_FIELD: ${VAULT_JIRA_CLIENT_CERT_FILENAME_FIELD:-filename}
+      VAULT_JIRA_CLIENT_CERT_PEM_FIELD: ${VAULT_JIRA_CLIENT_CERT_PEM_FIELD:-cert_pem}
+      VAULT_JIRA_CLIENT_KEY_FIELD: ${VAULT_JIRA_CLIENT_KEY_FIELD:-key_pem}
     volumes:
       - ./certs:/opt/gendwh/certs:ro
+      - ./secrets:/opt/gendwh/secrets:ro
     depends_on:
       postgres-system:
         condition: service_healthy
       keycloak-init:
+        condition: service_completed_successfully
+      vault-init:
         condition: service_completed_successfully
     restart: on-failure:3
 
@@ -164,8 +235,31 @@ services:
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
       KEYCLOAK_URL: http://keycloak:8080
       KEYCLOAK_ISSUER: ${KEYCLOAK_ISSUER:-http://localhost:8080/realms/gendwh}
+      EXTERNAL_CA_BUNDLE_PATH: ${EXTERNAL_CA_BUNDLE_PATH:-}
+      JIRA_CLIENT_CERT_PATH: ${JIRA_CLIENT_CERT_PATH:-}
+      JIRA_CLIENT_KEY_PATH: ${JIRA_CLIENT_KEY_PATH:-}
+      JIRA_CLIENT_CERT_PASSWORD: ${JIRA_CLIENT_CERT_PASSWORD:-}
+      JIRA_CLIENT_CERT_PASSWORD_FILE: ${JIRA_CLIENT_CERT_PASSWORD_FILE:-}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_AUTH_METHOD: ${VAULT_AUTH_METHOD:-approle}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      VAULT_TOKEN_FILE: ${VAULT_TOKEN_FILE:-}
+      VAULT_APPROLE_MOUNT: ${VAULT_APPROLE_MOUNT:-approle}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_ROLE_ID_FILE: ${VAULT_ROLE_ID_FILE:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      VAULT_SECRET_ID_FILE: ${VAULT_SECRET_ID_FILE:-}
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
+      VAULT_KV_VERSION: ${VAULT_KV_VERSION:-v2}
+      VAULT_JIRA_CLIENT_CERT_SECRET_PATH: ${VAULT_JIRA_CLIENT_CERT_SECRET_PATH:-}
+      VAULT_JIRA_CLIENT_CERT_FIELD: ${VAULT_JIRA_CLIENT_CERT_FIELD:-p12_base64}
+      VAULT_JIRA_CLIENT_CERT_PASSWORD_FIELD: ${VAULT_JIRA_CLIENT_CERT_PASSWORD_FIELD:-password}
+      VAULT_JIRA_CLIENT_CERT_FILENAME_FIELD: ${VAULT_JIRA_CLIENT_CERT_FILENAME_FIELD:-filename}
+      VAULT_JIRA_CLIENT_CERT_PEM_FIELD: ${VAULT_JIRA_CLIENT_CERT_PEM_FIELD:-cert_pem}
+      VAULT_JIRA_CLIENT_KEY_FIELD: ${VAULT_JIRA_CLIENT_KEY_FIELD:-key_pem}
     volumes:
       - ./certs:/opt/gendwh/certs:ro
+      - ./secrets:/opt/gendwh/secrets:ro
     ports:
       - "8000:8000"
     depends_on:
@@ -176,6 +270,8 @@ services:
       redis:
         condition: service_healthy
       backend-init:
+        condition: service_completed_successfully
+      vault-init:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -204,8 +300,31 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      EXTERNAL_CA_BUNDLE_PATH: ${EXTERNAL_CA_BUNDLE_PATH:-}
+      JIRA_CLIENT_CERT_PATH: ${JIRA_CLIENT_CERT_PATH:-}
+      JIRA_CLIENT_KEY_PATH: ${JIRA_CLIENT_KEY_PATH:-}
+      JIRA_CLIENT_CERT_PASSWORD: ${JIRA_CLIENT_CERT_PASSWORD:-}
+      JIRA_CLIENT_CERT_PASSWORD_FILE: ${JIRA_CLIENT_CERT_PASSWORD_FILE:-}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_AUTH_METHOD: ${VAULT_AUTH_METHOD:-approle}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      VAULT_TOKEN_FILE: ${VAULT_TOKEN_FILE:-}
+      VAULT_APPROLE_MOUNT: ${VAULT_APPROLE_MOUNT:-approle}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_ROLE_ID_FILE: ${VAULT_ROLE_ID_FILE:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      VAULT_SECRET_ID_FILE: ${VAULT_SECRET_ID_FILE:-}
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
+      VAULT_KV_VERSION: ${VAULT_KV_VERSION:-v2}
+      VAULT_JIRA_CLIENT_CERT_SECRET_PATH: ${VAULT_JIRA_CLIENT_CERT_SECRET_PATH:-}
+      VAULT_JIRA_CLIENT_CERT_FIELD: ${VAULT_JIRA_CLIENT_CERT_FIELD:-p12_base64}
+      VAULT_JIRA_CLIENT_CERT_PASSWORD_FIELD: ${VAULT_JIRA_CLIENT_CERT_PASSWORD_FIELD:-password}
+      VAULT_JIRA_CLIENT_CERT_FILENAME_FIELD: ${VAULT_JIRA_CLIENT_CERT_FILENAME_FIELD:-filename}
+      VAULT_JIRA_CLIENT_CERT_PEM_FIELD: ${VAULT_JIRA_CLIENT_CERT_PEM_FIELD:-cert_pem}
+      VAULT_JIRA_CLIENT_KEY_FIELD: ${VAULT_JIRA_CLIENT_KEY_FIELD:-key_pem}
     volumes:
       - ./certs:/opt/gendwh/certs:ro
+      - ./secrets:/opt/gendwh/secrets:ro
     depends_on:
       postgres-system:
         condition: service_healthy
@@ -214,6 +333,8 @@ services:
       redis:
         condition: service_healthy
       backend-init:
+        condition: service_completed_successfully
+      vault-init:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -240,12 +361,37 @@ services:
       REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
       CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD}@redis:6379/1
+      EXTERNAL_CA_BUNDLE_PATH: ${EXTERNAL_CA_BUNDLE_PATH:-}
+      JIRA_CLIENT_CERT_PATH: ${JIRA_CLIENT_CERT_PATH:-}
+      JIRA_CLIENT_KEY_PATH: ${JIRA_CLIENT_KEY_PATH:-}
+      JIRA_CLIENT_CERT_PASSWORD: ${JIRA_CLIENT_CERT_PASSWORD:-}
+      JIRA_CLIENT_CERT_PASSWORD_FILE: ${JIRA_CLIENT_CERT_PASSWORD_FILE:-}
+      VAULT_ADDR: ${VAULT_ADDR:-}
+      VAULT_AUTH_METHOD: ${VAULT_AUTH_METHOD:-approle}
+      VAULT_TOKEN: ${VAULT_TOKEN:-}
+      VAULT_TOKEN_FILE: ${VAULT_TOKEN_FILE:-}
+      VAULT_APPROLE_MOUNT: ${VAULT_APPROLE_MOUNT:-approle}
+      VAULT_ROLE_ID: ${VAULT_ROLE_ID:-}
+      VAULT_ROLE_ID_FILE: ${VAULT_ROLE_ID_FILE:-}
+      VAULT_SECRET_ID: ${VAULT_SECRET_ID:-}
+      VAULT_SECRET_ID_FILE: ${VAULT_SECRET_ID_FILE:-}
+      VAULT_KV_MOUNT: ${VAULT_KV_MOUNT:-secret}
+      VAULT_KV_VERSION: ${VAULT_KV_VERSION:-v2}
+      VAULT_JIRA_CLIENT_CERT_SECRET_PATH: ${VAULT_JIRA_CLIENT_CERT_SECRET_PATH:-}
+      VAULT_JIRA_CLIENT_CERT_FIELD: ${VAULT_JIRA_CLIENT_CERT_FIELD:-p12_base64}
+      VAULT_JIRA_CLIENT_CERT_PASSWORD_FIELD: ${VAULT_JIRA_CLIENT_CERT_PASSWORD_FIELD:-password}
+      VAULT_JIRA_CLIENT_CERT_FILENAME_FIELD: ${VAULT_JIRA_CLIENT_CERT_FILENAME_FIELD:-filename}
+      VAULT_JIRA_CLIENT_CERT_PEM_FIELD: ${VAULT_JIRA_CLIENT_CERT_PEM_FIELD:-cert_pem}
+      VAULT_JIRA_CLIENT_KEY_FIELD: ${VAULT_JIRA_CLIENT_KEY_FIELD:-key_pem}
     volumes:
       - ./certs:/opt/gendwh/certs:ro
+      - ./secrets:/opt/gendwh/secrets:ro
     depends_on:
       redis:
         condition: service_healthy
       backend-init:
+        condition: service_completed_successfully
+      vault-init:
         condition: service_completed_successfully
     healthcheck:
       test:

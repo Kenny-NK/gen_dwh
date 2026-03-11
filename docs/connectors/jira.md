@@ -101,6 +101,88 @@ Raw record payload is still preserved in `_raw` where applicable.
 - `extraction_config`:
   includes `query_mode`, `streams`, `project_keys`, `batch_size`, `incremental_enabled`, `replication_key`, `start_date`, `jql`
 
+## mTLS Deployment
+
+Some corporate Jira gateways require a client certificate before normal Jira authentication.
+For this scenario the connector supports mTLS in both native Jira requests and the Meltano path.
+
+Relevant environment variables:
+
+1. `JIRA_CLIENT_CERT_PATH`
+   Path to a client certificate in `PKCS#12` (`.p12` / `.pfx`) or PEM format.
+2. `JIRA_CLIENT_KEY_PATH`
+   Optional private key path when the client certificate is provided as PEM.
+3. `JIRA_CLIENT_CERT_PASSWORD`
+   Direct password for encrypted certificate material.
+4. `JIRA_CLIENT_CERT_PASSWORD_FILE`
+   Preferred production option. Path to a file that contains only the certificate password.
+5. `EXTERNAL_CA_BUNDLE_PATH`
+   Optional CA bundle for corporate trust roots.
+
+Production recommendation:
+
+1. Mount the certificate into the container from a secret store or protected host volume.
+2. Keep the certificate password outside `.env` and pass it through `JIRA_CLIENT_CERT_PASSWORD_FILE`.
+3. Do not commit `.p12`, `.pem`, `.key`, or password files into the repository.
+4. Prefer Vault-backed delivery for Jira client certificate material in production.
+
+Example:
+
+```env
+JIRA_CLIENT_CERT_PATH=/opt/gendwh/certs/jira-client.p12
+JIRA_CLIENT_CERT_PASSWORD_FILE=/opt/gendwh/secrets/jira_client_cert_password
+EXTERNAL_CA_BUNDLE_PATH=/opt/gendwh/certs/external-ca.pem
+```
+
+### Vault-backed mTLS
+
+The connector can fetch Jira client certificate material directly from HashiCorp Vault KV.
+When `VAULT_JIRA_CLIENT_CERT_SECRET_PATH` is configured, Vault takes precedence over local
+`JIRA_CLIENT_CERT_PATH`.
+
+Supported Vault payload fields:
+
+1. `p12_base64`
+   Base64-encoded PKCS#12 bundle
+2. `password`
+   Password for the bundle
+3. `filename`
+   Optional original filename
+4. `cert_pem`
+   Alternative PEM certificate content
+5. `key_pem`
+   Optional PEM private key when PEM certificate mode is used
+
+Relevant settings:
+
+1. `VAULT_ADDR`
+2. `VAULT_AUTH_METHOD=approle`
+3. `VAULT_APPROLE_MOUNT`
+4. `VAULT_ROLE_ID` or `VAULT_ROLE_ID_FILE`
+5. `VAULT_SECRET_ID` or `VAULT_SECRET_ID_FILE`
+6. `VAULT_KV_MOUNT`
+7. `VAULT_KV_VERSION`
+8. `VAULT_JIRA_CLIENT_CERT_SECRET_PATH`
+
+`VAULT_TOKEN` or `VAULT_TOKEN_FILE` should be treated as bootstrap or fallback-only options.
+Production runtime should use AppRole, Vault Agent, or another non-root Vault auth method.
+
+Example KV v2 secret path:
+
+```text
+secret/data/gendwh/jira/client-cert
+```
+
+Example secret fields:
+
+```json
+{
+  "p12_base64": "<base64 PKCS#12 bundle>",
+  "password": "<bundle password>",
+  "filename": "jira-client.p12"
+}
+```
+
 ## API Endpoints
 
 - `GET /api/v1/sources/{source_id}/jira/projects`
@@ -137,6 +219,8 @@ Use this checklist against a real Jira source before release:
 2. Validate credentials successfully
 3. Create Jira source with `basic_token` or `basic_password`
 4. Validate credentials successfully
+5. If corporate Jira requires client certificates, verify the source also validates with the
+   mounted mTLS certificate enabled
 
 ### Basic Query Mode
 
