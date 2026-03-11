@@ -429,6 +429,13 @@ def generate_tap_jira_config(
 ) -> dict:
     extraction = extraction_config or {}
     selected_streams = streams or extraction.get("streams") or ["issues"]
+    query_mode = str(extraction.get("query_mode") or "").strip().lower()
+    project_keys = extraction.get("project_keys", [])
+    raw_jql = extraction.get("jql")
+    if query_mode == "jql":
+        project_keys = []
+    else:
+        raw_jql = None
     raw_auth_type = str(extraction.get("auth_type") or "").strip().lower()
     if raw_auth_type == "pat_bearer":
         auth_type = "pat_bearer"
@@ -445,10 +452,10 @@ def generate_tap_jira_config(
         "username": source_config.get("username", ""),
         "secret": source_config.get("password", ""),
         "auth_type": auth_type,
-        "projects": extraction.get("project_keys", []),
+        "projects": project_keys,
         "start_date": extraction.get("start_date"),
         "page_size_issues": extraction.get("batch_size", 100),
-        "issues_jql": _build_jira_issues_jql(extraction.get("project_keys", []), extraction.get("jql")),
+        "issues_jql": _build_jira_issues_jql(project_keys, raw_jql),
         "streams": selected_streams,
         "incremental_enabled": extraction.get("incremental_enabled", False),
         "replication_key": extraction.get("replication_key", "updated"),

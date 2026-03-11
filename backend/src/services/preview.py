@@ -493,17 +493,28 @@ class PreviewService:
                     streams=[requested_stream],
                     project_keys=config.project_keys,
                     jql=config.jql,
+                    query_mode=config.query_mode,
                     batch_size=batch_size,
+                    start_date=config.start_date,
                 )
         except Exception as exc:
             classified = JiraService.classify_error(exc)
             raise ValueError(classified.message) from exc
 
-        raw_rows = payload.get("records", {}).get(requested_stream, [])
-        rows = self._normalize_preview_rows(
-            [row for row in raw_rows if isinstance(row, dict)]
-        )
-        columns = self._build_preview_columns(rows)
+        normalized_rows = payload.get("rows_by_stream", {}).get(requested_stream)
+        if isinstance(normalized_rows, list):
+            rows = [row for row in normalized_rows if isinstance(row, dict)]
+            schema_payload = payload.get("schema_by_stream", {}).get(requested_stream)
+            columns = payload.get("columns_by_stream", {}).get(requested_stream) or self._build_preview_columns(
+                rows,
+                schema_payload=schema_payload if isinstance(schema_payload, dict) else None,
+            )
+        else:
+            raw_rows = payload.get("records", {}).get(requested_stream, [])
+            rows = self._normalize_preview_rows(
+                [row for row in raw_rows if isinstance(row, dict)]
+            )
+            columns = self._build_preview_columns(rows)
 
         if sort_by:
             sort_by = _validate_identifier(sort_by, "sort_by")

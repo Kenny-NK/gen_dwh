@@ -11,6 +11,12 @@ import httpx
 
 from src.core.http import get_http_client_ssl_context
 from src.schemas.jira import JiraErrorResponse, JiraProject, JiraStreamMetadata
+from src.services.jira_issue_normalization import (
+    ISSUE_API_FIELDS,
+    issue_preview_columns,
+    issue_preview_schema,
+    normalize_issue_record,
+)
 
 
 _ORDER_BY_RE = re.compile(r"\border\s+by\b", re.IGNORECASE)
@@ -375,6 +381,32 @@ class JiraService:
         ordering = text[match.start() :].strip()
         return filters or None, ordering or None
 
+    @staticmethod
+    def resolve_issue_query_inputs(
+        *,
+        query_mode: str | None,
+        project_keys: list[str] | None = None,
+        jql: str | None = None,
+        start_date: datetime | None = None,
+        replication_key: str | None = None,
+    ) -> dict[str, Any]:
+        normalized_mode = str(query_mode or "").strip().lower()
+        if normalized_mode == "jql":
+            return {
+                "query_mode": "jql",
+                "project_keys": [],
+                "jql": str(jql or "").strip() or None,
+                "start_date": None,
+                "replication_key": None,
+            }
+        return {
+            "query_mode": "basic",
+            "project_keys": [str(item).strip() for item in (project_keys or []) if str(item).strip()],
+            "jql": None,
+            "start_date": start_date,
+            "replication_key": str(replication_key or "updated").strip() or "updated",
+        }
+
     def build_issue_jql(
         self,
         *,
@@ -407,6 +439,7 @@ class JiraService:
         *,
         project_keys: list[str] | None = None,
         jql: str | None = None,
+        query_mode: str | None = None,
         batch_size: int = 100,
         start_date: datetime | None = None,
         replication_key: str | None = None,
@@ -415,11 +448,18 @@ class JiraService:
         results: list[dict[str, Any]] = []
         start_at = 0
         page_size = min(max(batch_size, 1), 100)
-        query = self.build_issue_jql(
+        effective = self.resolve_issue_query_inputs(
+            query_mode=query_mode,
             project_keys=project_keys,
             jql=jql,
             start_date=start_date,
             replication_key=replication_key,
+        )
+        query = self.build_issue_jql(
+            project_keys=effective["project_keys"],
+            jql=effective["jql"],
+            start_date=effective["start_date"],
+            replication_key=effective["replication_key"],
             cursor_value=cursor_value,
         )
 
@@ -431,7 +471,7 @@ class JiraService:
                     "jql": query,
                     "startAt": start_at,
                     "maxResults": page_size,
-                    "fields": "summary,updated,created,status,project,assignee,reporter,comment,worklog",
+                    "fields": ",".join((*ISSUE_API_FIELDS, "comment", "worklog")),
                 },
             )
             payload = response.json() if response.content else {}
@@ -539,6 +579,7 @@ class JiraService:
         streams: list[str],
         project_keys: list[str] | None = None,
         jql: str | None = None,
+        query_mode: str | None = None,
         batch_size: int = 100,
         start_date: datetime | None = None,
         incremental_enabled: bool = False,
@@ -564,6 +605,7 @@ class JiraService:
             issues = await self.search_issues(
                 project_keys=project_keys,
                 jql=jql,
+                query_mode=query_mode,
                 batch_size=batch_size,
                 start_date=start_date,
                 replication_key=issue_replication_key,
@@ -630,11 +672,15 @@ class JiraService:
         streams: list[str],
         project_keys: list[str] | None = None,
         jql: str | None = None,
+        query_mode: str | None = None,
         batch_size: int = 50,
+        start_date: datetime | None = None,
     ) -> dict[str, Any]:
         selected = self.resolve_stream_dependencies(streams)
         records: dict[str, list[dict[str, Any]]] = {}
         schema: dict[str, dict[str, Any]] = {}
+        columns_by_stream: dict[str, list[str]] = {}
+        rows_by_stream: dict[str, list[dict[str, Any]]] = {}
 
         if "projects" in selected:
             projects = await self.get_projects()
@@ -643,21 +689,22 @@ class JiraService:
                 projects = [project for project in projects if project.key.upper() in allowed]
             records["projects"] = [project.model_dump() for project in projects[:batch_size]]
             schema["projects"] = self.get_stream_schema("projects")
+            rows_by_stream["projects"] = records["projects"]
+            columns_by_stream["projects"] = list(schema["projects"]["schema"].get("properties", {}).keys())
 
         if "issues" in selected:
-            jql_parts: list[str] = []
-            user_filters, user_ordering = self._split_jql_ordering(jql)
-            if project_keys:
-                joined = ",".join(sorted({item.strip().upper() for item in project_keys if item.strip()}))
-                if joined:
-                    jql_parts.append(f"project IN ({joined})")
-            if user_filters:
-                jql_parts.append(f"({user_filters})")
-            filters_sql = " AND ".join(jql_parts)
-            if filters_sql:
-                query = f"{filters_sql} {user_ordering or 'ORDER BY updated DESC'}"
-            else:
-                query = user_ordering or "ORDER BY updated DESC"
+            effective = self.resolve_issue_query_inputs(
+                query_mode=query_mode,
+                project_keys=project_keys,
+                jql=jql,
+                start_date=start_date,
+            )
+            query = self.build_issue_jql(
+                project_keys=effective["project_keys"],
+                jql=effective["jql"],
+                start_date=effective["start_date"],
+                replication_key=effective["replication_key"],
+            )
 
             response = await self._request(
                 "GET",
@@ -665,28 +712,61 @@ class JiraService:
                 params={
                     "jql": query,
                     "maxResults": min(max(batch_size, 1), 100),
-                    "fields": "summary,updated,created,status,project,assignee,reporter",
+                    "fields": ",".join(ISSUE_API_FIELDS),
                 },
             )
             payload = response.json() if response.content else {}
             issues = payload.get("issues") if isinstance(payload, dict) else []
-            records["issues"] = issues if isinstance(issues, list) else []
-            schema["issues"] = self.get_stream_schema("issues")
+            normalized_rows = [
+                normalize_issue_record(issue)
+                for issue in issues
+                if isinstance(issue, dict)
+            ] if isinstance(issues, list) else []
+            records["issues"] = normalized_rows
+            schema["issues"] = issue_preview_schema()
+            rows_by_stream["issues"] = normalized_rows
+            columns_by_stream["issues"] = issue_preview_columns(normalized_rows)
 
         if "users" in selected:
             records["users"] = await self._get_users_preview_records(batch_size)
             schema["users"] = self.get_stream_schema("users")
+            rows_by_stream["users"] = records["users"]
+            columns_by_stream["users"] = list(schema["users"]["schema"].get("properties", {}).keys())
 
         for stream_name in selected:
             if stream_name not in schema:
                 schema[stream_name] = self.get_stream_schema(stream_name)
             records.setdefault(stream_name, [])
+            rows_by_stream.setdefault(stream_name, records[stream_name])
+            columns_by_stream.setdefault(
+                stream_name,
+                list(schema[stream_name]["schema"].get("properties", {}).keys()),
+            )
+
+        effective = self.resolve_issue_query_inputs(
+            query_mode=query_mode,
+            project_keys=project_keys,
+            jql=jql,
+            start_date=start_date,
+        )
 
         return {
             "records": records,
             "schema": schema,
             "streams": selected,
             "record_count": sum(len(value) for value in records.values()),
+            "effective_query_mode": effective["query_mode"],
+            "effective_jql": self.build_issue_jql(
+                project_keys=effective["project_keys"],
+                jql=effective["jql"],
+                start_date=effective["start_date"],
+                replication_key=effective["replication_key"],
+            )
+            if "issues" in selected
+            else None,
+            "columns_by_stream": columns_by_stream,
+            "rows_by_stream": rows_by_stream,
+            "schema_by_stream": schema,
         }
 
     @staticmethod

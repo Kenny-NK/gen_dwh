@@ -199,6 +199,93 @@ def test_build_issue_jql_preserves_single_order_by() -> None:
     assert query == '(project = DWHTOT AND status != "Cancelled") ORDER BY created DESC'
 
 
+def test_resolve_issue_query_inputs_uses_only_jql_mode_filters() -> None:
+    resolved = JiraService.resolve_issue_query_inputs(
+        query_mode="jql",
+        project_keys=["DWHTOT"],
+        jql='project = GEOPR ORDER BY created DESC',
+        replication_key="updated",
+    )
+
+    assert resolved["query_mode"] == "jql"
+    assert resolved["project_keys"] == []
+    assert resolved["jql"] == 'project = GEOPR ORDER BY created DESC'
+    assert resolved["start_date"] is None
+    assert resolved["replication_key"] is None
+
+
+def test_resolve_issue_query_inputs_uses_basic_filters_without_jql() -> None:
+    resolved = JiraService.resolve_issue_query_inputs(
+        query_mode="basic",
+        project_keys=["DWHTOT"],
+        jql='project = GEOPR ORDER BY created DESC',
+        replication_key="created",
+    )
+
+    assert resolved["query_mode"] == "basic"
+    assert resolved["project_keys"] == ["DWHTOT"]
+    assert resolved["jql"] is None
+    assert resolved["replication_key"] == "created"
+
+
+def test_preview_records_normalizes_issues_and_exposes_columns() -> None:
+    request = httpx.Request("GET", "https://example.local/rest/api/2/search")
+    response = httpx.Response(
+        200,
+        request=request,
+        json={
+            "issues": [
+                {
+                    "id": "10001",
+                    "key": "DWHTOT-1",
+                    "fields": {
+                        "summary": "Implement Jira connector",
+                        "status": {"name": "Done", "statusCategory": {"name": "Completed"}},
+                        "issuetype": {"name": "Task"},
+                        "project": {"id": "200", "key": "DWHTOT", "name": "Platform"},
+                        "created": "2026-03-01T12:00:00.000+0000",
+                        "updated": "2026-03-02T12:00:00.000+0000",
+                        "resolved": "2026-03-03T12:00:00.000+0000",
+                        "reporter": {"accountId": "rep-1", "displayName": "Reporter"},
+                    },
+                }
+            ]
+        },
+    )
+
+    class DummyService(JiraService):
+            async def _request(self, method: str, path: str, **kwargs) -> httpx.Response:
+                assert method == "GET"
+                assert path == "search"
+                params = kwargs.get("params", {})
+                assert params["jql"] == '(project = DWHTOT) ORDER BY created DESC'
+                assert "summary" in params["fields"]
+                assert "resolved" in params["fields"]
+                return response
+
+    service = DummyService("https://example.local", "user", "token")
+    try:
+        import asyncio
+
+        preview = asyncio.run(
+            service.preview_records(
+                streams=["issues"],
+                query_mode="jql",
+                jql='project = DWHTOT ORDER BY created DESC',
+            )
+        )
+    finally:
+        import asyncio
+
+        asyncio.run(service.aclose())
+
+    assert preview["effective_query_mode"] == "jql"
+    assert preview["effective_jql"] == '(project = DWHTOT) ORDER BY created DESC'
+    assert preview["records"]["issues"][0]["issue_key"] == "DWHTOT-1"
+    assert preview["columns_by_stream"]["issues"][0] == "issue_id"
+    assert preview["schema_by_stream"]["issues"]["schema"]["properties"]["issue_key"]["type"] == ["string", "null"]
+
+
 def test_classify_error_uses_jira_error_message_for_bad_request() -> None:
     request = httpx.Request("GET", "https://example.local/rest/api/2/search")
     response = httpx.Response(

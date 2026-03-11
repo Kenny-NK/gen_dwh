@@ -12,10 +12,12 @@ import { useToast } from "../../components/common/Toast";
 import { JiraPreviewResults } from "../../components/JiraConfig/JiraPreviewResults";
 import { JiraStreamSelector } from "../../components/JiraConfig/JiraStreamSelector";
 import { useErrorToast } from "../../hooks/useErrorToast";
-import type {
-  JiraExtractionConfig,
-  JiraFlowStreamConfig,
-  JiraPreviewResponse,
+import {
+  defaultJiraExtractionConfig,
+  normalizeJiraExtractionConfig,
+  type JiraExtractionConfig,
+  type JiraFlowStreamConfig,
+  type JiraPreviewResponse,
 } from "../../services/jiraApi";
 
 type Source = {
@@ -63,16 +65,6 @@ const defaultPayload: FlowPayload = {
   upsert_key: "",
 };
 
-const defaultJiraConfig: JiraExtractionConfig = {
-  streams: ["issues"],
-  start_date: null,
-  batch_size: 100,
-  project_keys: [],
-  incremental_enabled: false,
-  replication_key: "updated",
-  jql: "",
-};
-
 function defaultStreamConfig(stream: string): JiraFlowStreamConfig {
   const incrementalStreams = new Set(["issues", "worklogs", "changelogs", "issue_comments"]);
   return {
@@ -92,7 +84,7 @@ export default function FlowCreate() {
     return params.get("sourceId") ?? "";
   }, []);
   const [jiraStreams, setJiraStreams] = React.useState<JiraFlowStreamConfig[]>([]);
-  const [jiraConfig, setJiraConfig] = React.useState<JiraExtractionConfig>(defaultJiraConfig);
+  const [jiraConfig, setJiraConfig] = React.useState<JiraExtractionConfig>(defaultJiraExtractionConfig);
   const [jiraPreview, setJiraPreview] = React.useState<JiraPreviewResponse | null>(null);
   const {
     register,
@@ -126,22 +118,29 @@ export default function FlowCreate() {
   React.useEffect(() => {
     if (!selectedSourceId || !isJiraSource) {
       setJiraStreams([]);
-      setJiraConfig(defaultJiraConfig);
+      setJiraConfig(defaultJiraExtractionConfig);
       setJiraPreview(null);
       return;
     }
-    const nextConfig: JiraExtractionConfig = {
-      ...defaultJiraConfig,
-      ...(selectedSource?.extraction_config ?? {}),
-      streams:
-        selectedSource?.extraction_config?.streams?.length
-          ? selectedSource.extraction_config.streams
-          : defaultJiraConfig.streams,
-      project_keys: selectedSource?.extraction_config?.project_keys ?? defaultJiraConfig.project_keys,
-    };
+    const nextConfig: JiraExtractionConfig = normalizeJiraExtractionConfig(selectedSource?.extraction_config);
     setJiraConfig(nextConfig);
     setJiraPreview(null);
   }, [isJiraSource, selectedSource, selectedSourceId]);
+
+  React.useEffect(() => {
+    if (!isJiraSource) {
+      return;
+    }
+    setJiraPreview(null);
+  }, [
+    isJiraSource,
+    jiraConfig.query_mode,
+    jiraConfig.streams,
+    jiraConfig.project_keys,
+    jiraConfig.start_date,
+    jiraConfig.batch_size,
+    jiraConfig.jql,
+  ]);
 
   React.useEffect(() => {
     if (!isJiraSource) {

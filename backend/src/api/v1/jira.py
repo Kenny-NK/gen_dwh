@@ -1,5 +1,6 @@
 """Jira-specific source endpoints."""
 
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
@@ -23,6 +24,8 @@ class JiraPreviewRequest(BaseModel):
     streams: list[str] | None = None
     project_keys: list[str] | None = None
     jql: str | None = None
+    query_mode: str | None = None
+    start_date: datetime | None = None
     batch_size: int | None = Field(default=None, ge=1, le=1000)
 
 
@@ -143,6 +146,8 @@ async def jira_preview(
     streams = body.streams or config.streams
     project_keys = body.project_keys if body.project_keys is not None else config.project_keys
     jql = body.jql if body.jql is not None else config.jql
+    query_mode = body.query_mode if body.query_mode is not None else config.query_mode
+    start_date = body.start_date if body.start_date is not None else config.start_date
     batch_size = body.batch_size if body.batch_size is not None else config.batch_size
 
     try:
@@ -151,7 +156,9 @@ async def jira_preview(
                 streams=streams,
                 project_keys=project_keys,
                 jql=jql,
+                query_mode=query_mode,
                 batch_size=batch_size,
+                start_date=start_date,
             )
     except Exception as exc:
         classified = JiraService.classify_error(exc)
@@ -170,4 +177,9 @@ async def jira_preview(
         "records": preview["records"],
         "schema": preview["schema"],
         "record_count": preview["record_count"],
+        "effective_query_mode": preview.get("effective_query_mode"),
+        "effective_jql": preview.get("effective_jql"),
+        "columns_by_stream": preview.get("columns_by_stream", {}),
+        "rows_by_stream": preview.get("rows_by_stream", {}),
+        "schema_by_stream": preview.get("schema_by_stream", preview["schema"]),
     }

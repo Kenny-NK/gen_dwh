@@ -12,6 +12,7 @@ from sqlalchemy.engine import make_url
 from src.core.config import settings
 from src.core.db_utils import quote_ident
 from src.schemas.jira import JiraExtractionConfig
+from src.services.jira_issue_normalization import normalize_issue_record
 from src.services.jira_service import JiraService
 from src.services.record_flattening import (
     flatten_record,
@@ -191,6 +192,8 @@ def _resolve_upsert_column(
         str(global_upsert_key or "").strip(),
         *primary_keys,
         str(table_spec.get("replication_key") or "").strip(),
+        "issue_id",
+        "issue_key",
         "id",
         "accountId",
         "key",
@@ -236,6 +239,38 @@ def _prepare_rows(
     return all_columns, prepared_rows, max_cursor
 
 
+def _prepare_issue_rows(
+    records: list[dict[str, Any]],
+    replication_key: str | None,
+) -> tuple[list[str], list[dict[str, Any]], str | None]:
+    all_columns: list[str] = []
+    seen_columns: set[str] = set()
+    prepared_rows: list[dict[str, Any]] = []
+    max_cursor: str | None = None
+
+    for record in records:
+        normalized_columns = normalize_issue_record(record)
+        for column in normalized_columns:
+            if column in seen_columns:
+                continue
+            seen_columns.add(column)
+            all_columns.append(column)
+        raw_fields = record.get("fields") if isinstance(record.get("fields"), dict) else {}
+        cursor = _cursor_value(raw_fields, replication_key)
+        if cursor and (max_cursor is None or cursor > max_cursor):
+            max_cursor = cursor
+        prepared_rows.append(
+            {
+                **normalized_columns,
+                "_record_id": normalized_columns.get("issue_id") or normalized_columns.get("issue_key"),
+                "_cursor_value": cursor,
+                "_raw": record,
+            }
+        )
+
+    return all_columns, prepared_rows, max_cursor
+
+
 async def _store_stream_records(
     conn: asyncpg.Connection,
     target_schema: str,
@@ -248,12 +283,16 @@ async def _store_stream_records(
     progress_callback: Callable[[int], Awaitable[None]] | None = None,
 ) -> tuple[int, str | None]:
     replication_key = str(table_spec.get("replication_key") or "").strip() or None
-    columns, rows, max_cursor = _prepare_rows(records, replication_key)
+    stream_name = str(table_spec.get("stream") or table_spec.get("table") or "").strip().lower()
+    if stream_name == "issues":
+        columns, rows, max_cursor = _prepare_issue_rows(records, replication_key)
+    else:
+        columns, rows, max_cursor = _prepare_rows(records, replication_key)
     upsert_column = None
     if write_mode == "upsert":
         upsert_column = _resolve_upsert_column(
             table_spec,
-            str(table_spec.get("stream") or table_spec.get("table") or "").strip().lower(),
+            stream_name,
             columns,
             global_upsert_key,
         )
@@ -314,6 +353,7 @@ async def run_jira_pat_to_postgres(
                 ],
                 project_keys=extraction.project_keys,
                 jql=extraction.jql,
+                query_mode=extraction.query_mode,
                 batch_size=extraction.batch_size,
                 start_date=extraction.start_date,
                 incremental_enabled=extraction.incremental_enabled,

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class JiraProject(BaseModel):
@@ -16,6 +16,7 @@ class JiraProject(BaseModel):
 
 class JiraExtractionConfig(BaseModel):
     auth_type: Literal["basic_token", "basic_password", "pat_bearer"] = "basic_token"
+    query_mode: Literal["basic", "jql"] = "basic"
     streams: list[str] = Field(default_factory=lambda: ["issues"])
     start_date: datetime | None = None
     batch_size: int = Field(default=100, ge=1, le=1000)
@@ -36,6 +37,14 @@ class JiraExtractionConfig(BaseModel):
             return "basic_token"
         return normalized
 
+    @field_validator("query_mode", mode="before")
+    @classmethod
+    def _normalize_query_mode(cls, value: str | None) -> str:
+        normalized = str(value or "").strip().lower()
+        if normalized == "jql":
+            return "jql"
+        return "basic"
+
     @field_validator("streams")
     @classmethod
     def _validate_streams(cls, value: list[str]) -> list[str]:
@@ -51,6 +60,21 @@ class JiraExtractionConfig(BaseModel):
         if not deduplicated:
             raise ValueError("At least one stream must be selected")
         return deduplicated
+
+    @field_validator("jql", mode="before")
+    @classmethod
+    def _normalize_jql(cls, value: str | None) -> str | None:
+        text = str(value or "").strip()
+        return text or None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _infer_legacy_query_mode(cls, value: object) -> object:
+        if not isinstance(value, dict):
+            return value
+        if "query_mode" not in value and str(value.get("jql") or "").strip():
+            return {**value, "query_mode": "jql"}
+        return value
 
 
 class JiraStreamMetadata(BaseModel):

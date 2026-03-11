@@ -6,7 +6,13 @@ import { Button } from "../common/Button";
 import { Table } from "../common/Table";
 import { useToast } from "../common/Toast";
 import { useErrorToast } from "../../hooks/useErrorToast";
-import { type JiraExtractionConfig, type JiraPreviewResponse, runJiraPreview } from "../../services/jiraApi";
+import {
+  buildJiraPreviewPayload,
+  getJiraPreviewStreamData,
+  type JiraExtractionConfig,
+  type JiraPreviewResponse,
+  runJiraPreview,
+} from "../../services/jiraApi";
 
 type Props = {
   sourceId: string;
@@ -18,7 +24,10 @@ type Props = {
 type PreviewRow = Record<string, unknown> & { id: string };
 
 function normalizeRows(rows: Array<Record<string, unknown>>): PreviewRow[] {
-  return rows.map((row, index) => ({ ...row, id: String(row.id ?? index + 1) }));
+  return rows.map((row, index) => ({
+    ...row,
+    id: String(row.id ?? row.issue_id ?? row.issue_key ?? index + 1),
+  }));
 }
 
 function stringifyCellValue(value: unknown): string {
@@ -44,13 +53,7 @@ export function JiraPreviewResults({ sourceId, config, onPreviewReady, createFlo
   } | null>(null);
 
   const previewMutation = useMutation({
-    mutationFn: () =>
-      runJiraPreview(sourceId, {
-        streams: config?.streams,
-        project_keys: config?.project_keys,
-        jql: config?.jql,
-        batch_size: config?.batch_size,
-      }),
+    mutationFn: () => runJiraPreview(sourceId, buildJiraPreviewPayload(config)),
     onSuccess: (data) => {
       setErrorDetails(null);
       const stream = data.streams[0] ?? "";
@@ -74,26 +77,44 @@ export function JiraPreviewResults({ sourceId, config, onPreviewReady, createFlo
       showErrorToast(error, "Не удалось запустить preview");
     },
   });
+  const resetPreviewMutation = previewMutation.reset;
+
+  const configSignature = useMemo(
+    () =>
+      JSON.stringify({
+        query_mode: config?.query_mode,
+        streams: config?.streams,
+        project_keys: config?.project_keys,
+        start_date: config?.start_date,
+        jql: config?.jql,
+        batch_size: config?.batch_size,
+      }),
+    [config]
+  );
+
+  React.useEffect(() => {
+    resetPreviewMutation();
+    setSelectedStream("");
+    setErrorDetails(null);
+  }, [configSignature, resetPreviewMutation]);
 
   const streams = previewMutation.data?.streams ?? [];
-  const rows = useMemo(() => {
-    if (!selectedStream) return [];
-    return normalizeRows(previewMutation.data?.records?.[selectedStream] ?? []);
-  }, [previewMutation.data, selectedStream]);
+  const streamData = useMemo(
+    () => getJiraPreviewStreamData(previewMutation.data, selectedStream),
+    [previewMutation.data, selectedStream]
+  );
+  const rows = useMemo(() => normalizeRows(streamData.rows), [streamData.rows]);
 
   const columns = useMemo(() => {
-      if (rows.length === 0) return [];
-    return Object.keys(rows[0]).map((key) => ({
+    if (streamData.columns.length === 0) return [];
+    return streamData.columns.map((key) => ({
       key,
       header: key,
       render: (row: PreviewRow) => stringifyCellValue(row[key]),
     }));
-  }, [rows]);
+  }, [streamData.columns]);
 
-  const schema = useMemo(() => {
-    if (!selectedStream) return null;
-    return previewMutation.data?.schema?.[selectedStream] ?? null;
-  }, [previewMutation.data, selectedStream]);
+  const schema = streamData.schema;
 
   return (
     <div className="mt-8 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
@@ -127,6 +148,17 @@ export function JiraPreviewResults({ sourceId, config, onPreviewReady, createFlo
 
       {previewMutation.data?.success && (
         <div className="mt-4 space-y-4">
+          <div className="flex flex-wrap items-center gap-3 text-sm text-slate-600 dark:text-slate-300">
+            <span>
+              Режим: <strong>{previewMutation.data.effective_query_mode === "jql" ? "JQL" : "Базовые настройки"}</strong>
+            </span>
+            {previewMutation.data.effective_jql && (
+              <span className="rounded-md bg-slate-100 px-2 py-1 text-xs dark:bg-slate-900">
+                {previewMutation.data.effective_jql}
+              </span>
+            )}
+          </div>
+
           <div className="flex items-center gap-3">
             <label className="text-sm font-medium text-slate-700 dark:text-slate-300">Stream</label>
             <select
