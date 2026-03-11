@@ -36,6 +36,8 @@ type UserFormState = {
   is_active: boolean;
 };
 
+type AdminViewTab = "tenants" | "users";
+
 const emptyTenantForm: TenantFormState = {
   name: "",
   subdomain: "",
@@ -80,6 +82,7 @@ export default function UsersRoles() {
   const [tenantSearch, setTenantSearch] = React.useState("");
   const [userSearch, setUserSearch] = React.useState("");
   const [userPage, setUserPage] = React.useState(1);
+  const [activeTab, setActiveTab] = React.useState<AdminViewTab>("tenants");
   const [editingTenant, setEditingTenant] = React.useState<AdminTenant | null>(null);
   const [editingUser, setEditingUser] = React.useState<AdminUser | null>(null);
   const [membershipUser, setMembershipUser] = React.useState<AdminUser | null>(null);
@@ -446,161 +449,214 @@ export default function UsersRoles() {
         </div>
       </section>
 
-      <div className="grid gap-6 xl:grid-cols-[1.1fr_1fr]">
-        <section className="app-card p-5">
-          <div className="mb-4 flex items-center justify-between">
+      <section className="app-card overflow-hidden">
+        <div className="border-b border-slate-200 px-5 py-4 dark:border-slate-800">
+          <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
-              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Тенанты и проекты</h2>
+              <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Управление каталогом</h2>
               <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-                Создание и управление tenant/workspace схемами проекта.
+                Раздели работу с tenant-ами и пользователями по отдельным вкладкам, чтобы не терять важные части формы и таблиц.
               </p>
             </div>
-          </div>
-
-          <div className="grid gap-3 md:grid-cols-2">
-            <Input
-              label="Название"
-              value={tenantForm.name}
-              onChange={(event) => setTenantForm((current) => ({ ...current, name: event.target.value }))}
-              placeholder="Acme Corp"
-            />
-            <Input
-              label="Subdomain"
-              value={tenantForm.subdomain}
-              onChange={(event) => setTenantForm((current) => ({ ...current, subdomain: event.target.value }))}
-              placeholder="acme"
-            />
-            <Input
-              label="Schema"
-              value={tenantForm.schema_name}
-              onChange={(event) => setTenantForm((current) => ({ ...current, schema_name: event.target.value }))}
-              placeholder="tenant_acme"
-            />
-            <Input
-              label="Keycloak realm"
-              value={tenantForm.keycloak_realm}
-              onChange={(event) => setTenantForm((current) => ({ ...current, keycloak_realm: event.target.value }))}
-              placeholder="gendwh"
-            />
-          </div>
-          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-            <input
-              type="checkbox"
-              checked={tenantForm.is_active}
-              onChange={(event) => setTenantForm((current) => ({ ...current, is_active: event.target.checked }))}
-              className="h-4 w-4 rounded border-slate-300"
-            />
-            Активировать tenant сразу после создания
-          </label>
-          <div className="mt-4 flex items-center gap-3">
-            <Button
-              onClick={() => createTenantMutation.mutate()}
-              loading={createTenantMutation.isPending}
-              disabled={!tenantForm.name.trim() || !tenantForm.subdomain.trim()}
+            <div
+              className="inline-flex w-full rounded-2xl border border-slate-200 bg-slate-100 p-1 dark:border-slate-700 dark:bg-slate-900/70 lg:w-auto"
+              role="tablist"
+              aria-label="Управление tenant-ами и пользователями"
             >
-              Создать tenant
-            </Button>
-            <Input
-              value={tenantSearch}
-              onChange={(event) => setTenantSearch(event.target.value)}
-              placeholder="Поиск tenant"
-            />
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "tenants"}
+                onClick={() => setActiveTab("tenants")}
+                className={[
+                  "flex min-w-0 flex-1 items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition lg:flex-none",
+                  activeTab === "tenants"
+                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-slate-100"
+                    : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100",
+                ].join(" ")}
+              >
+                <span>Тенанты и проекты</span>
+                <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                  {tenants.length}
+                </span>
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={activeTab === "users"}
+                onClick={() => setActiveTab("users")}
+                className={[
+                  "flex min-w-0 flex-1 items-center justify-center rounded-xl px-4 py-2.5 text-sm font-medium transition lg:flex-none",
+                  activeTab === "users"
+                    ? "bg-white text-slate-900 shadow-sm dark:bg-slate-800 dark:text-slate-100"
+                    : "text-slate-600 hover:text-slate-900 dark:text-slate-400 dark:hover:text-slate-100",
+                ].join(" ")}
+              >
+                <span>Пользователи</span>
+                <span className="ml-2 rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-700 dark:bg-slate-700 dark:text-slate-200">
+                  {totalUsers}
+                </span>
+              </button>
+            </div>
           </div>
+        </div>
 
-          <div className="mt-4">
-            {tenantsLoading ? (
-              <div>Загрузка...</div>
-            ) : (
-              <Table
-                columns={tenantColumns}
-                data={filteredTenants}
-                emptyMessage="Tenant-ов пока нет"
-              />
-            )}
-          </div>
-        </section>
+        <div className="p-5">
+          {activeTab === "tenants" ? (
+            <section>
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Тенанты и проекты</h3>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  Создание и управление tenant/workspace схемами проекта.
+                </p>
+              </div>
 
-        <section className="app-card p-5">
-          <div>
-            <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Пользователи</h2>
-            <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
-              Локальный каталог пользователей и их ролевые назначения по tenant-ам.
-            </p>
-          </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input
+                  label="Название"
+                  value={tenantForm.name}
+                  onChange={(event) => setTenantForm((current) => ({ ...current, name: event.target.value }))}
+                  placeholder="Acme Corp"
+                />
+                <Input
+                  label="Subdomain"
+                  value={tenantForm.subdomain}
+                  onChange={(event) => setTenantForm((current) => ({ ...current, subdomain: event.target.value }))}
+                  placeholder="acme"
+                />
+                <Input
+                  label="Schema"
+                  value={tenantForm.schema_name}
+                  onChange={(event) => setTenantForm((current) => ({ ...current, schema_name: event.target.value }))}
+                  placeholder="tenant_acme"
+                />
+                <Input
+                  label="Keycloak realm"
+                  value={tenantForm.keycloak_realm}
+                  onChange={(event) => setTenantForm((current) => ({ ...current, keycloak_realm: event.target.value }))}
+                  placeholder="gendwh"
+                />
+              </div>
+              <label className="mt-3 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={tenantForm.is_active}
+                  onChange={(event) => setTenantForm((current) => ({ ...current, is_active: event.target.checked }))}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                Активировать tenant сразу после создания
+              </label>
+              <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center">
+                <Button
+                  onClick={() => createTenantMutation.mutate()}
+                  loading={createTenantMutation.isPending}
+                  disabled={!tenantForm.name.trim() || !tenantForm.subdomain.trim()}
+                >
+                  Создать tenant
+                </Button>
+                <Input
+                  value={tenantSearch}
+                  onChange={(event) => setTenantSearch(event.target.value)}
+                  placeholder="Поиск tenant"
+                />
+              </div>
 
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            <Input
-              label="Email"
-              value={userForm.email}
-              onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}
-              placeholder="user@example.com"
-            />
-            <Input
-              label="Keycloak ID"
-              value={userForm.keycloak_id}
-              onChange={(event) => setUserForm((current) => ({ ...current, keycloak_id: event.target.value }))}
-              placeholder="realm-user-id"
-            />
-          </div>
-          <label className="mt-3 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-            <input
-              type="checkbox"
-              checked={userForm.is_active}
-              onChange={(event) => setUserForm((current) => ({ ...current, is_active: event.target.checked }))}
-              className="h-4 w-4 rounded border-slate-300"
-            />
-            Пользователь активен
-          </label>
-          <div className="mt-4 flex items-center gap-3">
-            <Button
-              onClick={() => createUserMutation.mutate()}
-              loading={createUserMutation.isPending}
-              disabled={!userForm.email.trim() || !userForm.keycloak_id.trim()}
-            >
-              Создать пользователя
-            </Button>
-            <Input
-              value={userSearch}
-              onChange={(event) => {
-                setUserSearch(event.target.value);
-                setUserPage(1);
-              }}
-              placeholder="Поиск пользователя"
-            />
-          </div>
+              <div className="mt-4 overflow-x-auto">
+                {tenantsLoading ? (
+                  <div>Загрузка...</div>
+                ) : (
+                  <Table
+                    columns={tenantColumns}
+                    data={filteredTenants}
+                    emptyMessage="Tenant-ов пока нет"
+                  />
+                )}
+              </div>
+            </section>
+          ) : (
+            <section>
+              <div className="mb-4">
+                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Пользователи</h3>
+                <p className="mt-1 text-sm text-slate-500 dark:text-slate-400">
+                  Локальный каталог пользователей и их ролевые назначения по tenant-ам.
+                </p>
+              </div>
 
-          <div className="mt-4">
-            {usersLoading ? (
-              <div>Загрузка...</div>
-            ) : (
-              <>
-                <Table columns={userColumns} data={users} emptyMessage="Пользователи не найдены" />
-                <div className="mt-4 flex items-center justify-between text-sm text-slate-500 dark:text-slate-400">
-                  <span>
-                    Всего пользователей: {totalUsers} • Страница {userPage} из {totalUserPages}
-                  </span>
-                  <div className="flex gap-2">
-                    <Button
-                      variant="secondary"
-                      onClick={() => setUserPage((current) => Math.max(1, current - 1))}
-                      disabled={userPage === 1}
-                    >
-                      Назад
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      onClick={() => setUserPage((current) => current + 1)}
-                      disabled={userPage >= totalUserPages}
-                    >
-                      Далее
-                    </Button>
-                  </div>
-                </div>
-              </>
-            )}
-          </div>
-        </section>
-      </div>
+              <div className="grid gap-3 md:grid-cols-2">
+                <Input
+                  label="Email"
+                  value={userForm.email}
+                  onChange={(event) => setUserForm((current) => ({ ...current, email: event.target.value }))}
+                  placeholder="user@example.com"
+                />
+                <Input
+                  label="Keycloak ID"
+                  value={userForm.keycloak_id}
+                  onChange={(event) => setUserForm((current) => ({ ...current, keycloak_id: event.target.value }))}
+                  placeholder="realm-user-id"
+                />
+              </div>
+              <label className="mt-3 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={userForm.is_active}
+                  onChange={(event) => setUserForm((current) => ({ ...current, is_active: event.target.checked }))}
+                  className="h-4 w-4 rounded border-slate-300"
+                />
+                Пользователь активен
+              </label>
+              <div className="mt-4 flex flex-col gap-3 lg:flex-row lg:items-center">
+                <Button
+                  onClick={() => createUserMutation.mutate()}
+                  loading={createUserMutation.isPending}
+                  disabled={!userForm.email.trim() || !userForm.keycloak_id.trim()}
+                >
+                  Создать пользователя
+                </Button>
+                <Input
+                  value={userSearch}
+                  onChange={(event) => {
+                    setUserSearch(event.target.value);
+                    setUserPage(1);
+                  }}
+                  placeholder="Поиск пользователя"
+                />
+              </div>
+
+              <div className="mt-4 overflow-x-auto">
+                {usersLoading ? (
+                  <div>Загрузка...</div>
+                ) : (
+                  <>
+                    <Table columns={userColumns} data={users} emptyMessage="Пользователи не найдены" />
+                    <div className="mt-4 flex flex-col gap-3 text-sm text-slate-500 dark:text-slate-400 lg:flex-row lg:items-center lg:justify-between">
+                      <span>
+                        Всего пользователей: {totalUsers} • Страница {userPage} из {totalUserPages}
+                      </span>
+                      <div className="flex gap-2">
+                        <Button
+                          variant="secondary"
+                          onClick={() => setUserPage((current) => Math.max(1, current - 1))}
+                          disabled={userPage === 1}
+                        >
+                          Назад
+                        </Button>
+                        <Button
+                          variant="secondary"
+                          onClick={() => setUserPage((current) => current + 1)}
+                          disabled={userPage >= totalUserPages}
+                        >
+                          Далее
+                        </Button>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            </section>
+          )}
+        </div>
+      </section>
 
       <Modal
         isOpen={editingTenant !== null}

@@ -2,7 +2,6 @@
 set -eu
 
 : "${VAULT_ADDR:?VAULT_ADDR is required}"
-: "${VAULT_ROOT_TOKEN_FILE:?VAULT_ROOT_TOKEN_FILE is required}"
 : "${VAULT_KV_MOUNT:=secret}"
 : "${VAULT_KV_VERSION:=v2}"
 : "${VAULT_APPROLE_MOUNT:=approle}"
@@ -14,10 +13,17 @@ set -eu
 : "${VAULT_BOOTSTRAP_JIRA_CLIENT_CERT_FILE:?VAULT_BOOTSTRAP_JIRA_CLIENT_CERT_FILE is required}"
 : "${VAULT_BOOTSTRAP_JIRA_CLIENT_CERT_PASSWORD_FILE:?VAULT_BOOTSTRAP_JIRA_CLIENT_CERT_PASSWORD_FILE is required}"
 
-export VAULT_TOKEN="$(tr -d '\n' < "$VAULT_ROOT_TOKEN_FILE")"
+vault_token=""
+if [ -n "${VAULT_ROOT_TOKEN:-}" ]; then
+  vault_token="$(printf '%s' "$VAULT_ROOT_TOKEN" | tr -d '\n')"
+elif [ -n "${VAULT_ROOT_TOKEN_FILE:-}" ] && [ -f "$VAULT_ROOT_TOKEN_FILE" ]; then
+  vault_token="$(tr -d '\n' < "$VAULT_ROOT_TOKEN_FILE")"
+fi
+
+export VAULT_TOKEN="$vault_token"
 
 if [ -z "$VAULT_TOKEN" ]; then
-  echo "Vault root token file is empty" >&2
+  echo "Vault root token is not configured" >&2
   exit 1
 fi
 
@@ -61,5 +67,6 @@ vault kv put "${VAULT_KV_MOUNT}/${VAULT_JIRA_CLIENT_CERT_SECRET_PATH}" \
   filename="$cert_filename" >/dev/null
 
 umask 077
+[ -n "${VAULT_ROOT_TOKEN_FILE:-}" ] && printf '%s\n' "$VAULT_TOKEN" > "$VAULT_ROOT_TOKEN_FILE"
 vault read -field=role_id "auth/${VAULT_APPROLE_MOUNT}/role/${VAULT_APPROLE_NAME}/role-id" > "$VAULT_APPROLE_ROLE_ID_FILE"
 vault write -f -field=secret_id "auth/${VAULT_APPROLE_MOUNT}/role/${VAULT_APPROLE_NAME}/secret-id" > "$VAULT_APPROLE_SECRET_ID_FILE"

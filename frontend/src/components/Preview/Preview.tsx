@@ -6,7 +6,7 @@ import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import api from "../../services/api";
 import { ApiErrorNotice } from "../common/ApiErrorNotice";
-import { MaskedValue } from "./MaskedValue";
+import { PreviewCellValue } from "./PreviewCellValue";
 
 interface PreviewProps {
   flowId: string;
@@ -108,11 +108,7 @@ export function Preview({ flowId, sessionId, tables }: PreviewProps) {
                   <tr key={i}>
                     {data.columns?.map((col: string) => (
                       <td key={col} className="px-4 py-2 text-slate-700 dark:text-slate-300">
-                        {typeof row[col] === "string" && row[col]?.toString().includes("***") ? (
-                          <MaskedValue value={String(row[col])} />
-                        ) : (
-                          String(row[col] ?? "")
-                        )}
+                        <PreviewCellValue value={row[col]} />
                       </td>
                     ))}
                   </tr>

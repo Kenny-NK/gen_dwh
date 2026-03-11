@@ -10,9 +10,12 @@ interface MaskedValueProps {
 
 export function MaskedValue({ value }: MaskedValueProps) {
   return (
-    <span className="inline-flex items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+    <span
+      className="inline-flex max-w-full items-center gap-1 rounded bg-amber-100 px-2 py-0.5 text-sm text-amber-800 dark:bg-amber-900/30 dark:text-amber-200"
+      title={value}
+    >
       <span className="text-xs">&#128274;</span>
-      {value}
+      <span className="truncate whitespace-nowrap">{value}</span>
     </span>
   );
 }
