@@ -112,9 +112,7 @@ async def _to_source_response(source, db: AsyncSession) -> SourceResponse:
             payload["jira_auth_type"] = "basic_password"
         else:
             payload["jira_auth_type"] = "basic_token"
-        payload["jira_runtime_engine"] = (
-            "native" if payload["jira_auth_type"] == "pat_bearer" else "meltano"
-        )
+        payload["jira_runtime_engine"] = "native"
     payload["token_mask"] = await _mask_token(source, db)
     return SourceResponse.model_validate(payload)
 

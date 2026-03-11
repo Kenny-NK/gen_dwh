@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 from sqlalchemy.engine import make_url
 
+from src.core.client_cert import get_jira_client_certificate_material
 from src.core.config import settings
 
 
@@ -32,6 +33,7 @@ _RECORD_PATTERNS = [
     re.compile(r"records[\s_-]*processed[^0-9]*(\d+)", re.IGNORECASE),
     re.compile(r'"records"\s*:\s*(\d+)'),
 ]
+_ORDER_BY_RE = re.compile(r"\border\s+by\b", re.IGNORECASE)
 _meltano_failure_count = 0
 _meltano_circuit_open_until = 0.0
 
@@ -62,20 +64,26 @@ def _normalize_jira_domain(base_url: str) -> str:
 
 
 def _build_jira_issues_jql(project_keys: list[str] | None, raw_jql: str | None) -> str | None:
+    normalized_jql = str(raw_jql or "").strip()
+    filters_sql: str | None = None
+    if normalized_jql:
+        order_match = _ORDER_BY_RE.search(normalized_jql)
+        if order_match:
+            filters_sql = normalized_jql[: order_match.start()].strip() or None
+        else:
+            filters_sql = normalized_jql
+
     clauses: list[str] = []
     normalized_keys = sorted({item.strip().upper() for item in (project_keys or []) if item and item.strip()})
     if normalized_keys:
         clauses.append(f"project in ({','.join(normalized_keys)})")
-
-    normalized_jql = str(raw_jql or "").strip()
-    if normalized_jql:
-        clauses.append(f"({normalized_jql})")
+    if filters_sql:
+        clauses.append(f"({filters_sql})")
 
     if not clauses:
         return None
-    if len(clauses) == 1:
-        return clauses[0]
-    return " AND ".join(f"({clause})" for clause in clauses)
+
+    return clauses[0] if len(clauses) == 1 else " AND ".join(f"({clause})" for clause in clauses)
 
 
 def _meltano_tls_env() -> dict[str, str]:
@@ -122,6 +130,21 @@ def _detect_jira_api_version(base_url: str, auth_type: str | None = None) -> str
 def _patch_tap_jira_client(client_path: Path) -> None:
     original = client_path.read_text(encoding="utf-8")
     patched = original
+    requests_session_block = """    @property
+    def requests_session(self) -> requests.Session:
+        \"\"\"Return requests session with optional custom CA bundle and client certificate.\"\"\"
+        if not self._requests_session:
+            self._requests_session = requests.Session()
+        verify_bundle = os.getenv(\"TAP_JIRA_CA_BUNDLE\", \"\").strip()
+        if verify_bundle:
+            self._requests_session.verify = verify_bundle
+        client_cert = os.getenv(\"TAP_JIRA_CLIENT_CERT\", \"\").strip()
+        client_key = os.getenv(\"TAP_JIRA_CLIENT_KEY\", \"\").strip()
+        if client_cert:
+            self._requests_session.cert = (client_cert, client_key) if client_key else client_cert
+        return self._requests_session
+
+"""
 
     patched = patched.replace("import requests.auth\n", "import os\n\nimport requests\nimport requests.auth\n")
     patched = patched.replace(
@@ -150,21 +173,23 @@ def _patch_tap_jira_client(client_path: Path) -> None:
         api_version = os.getenv(\"TAP_JIRA_API_VERSION\", \"3\").strip() or \"3\"
         return f\"https://{domain}/rest/api/{api_version}\"
 
-    @property
-    def requests_session(self) -> requests.Session:
-        \"\"\"Return requests session with optional custom CA bundle.\"\"\"
-        if not self._requests_session:
-            self._requests_session = requests.Session()
-        verify_bundle = os.getenv(\"TAP_JIRA_CA_BUNDLE\", \"\").strip()
-        if verify_bundle:
-            self._requests_session.verify = verify_bundle
-        return self._requests_session
-
+"""
+        + requests_session_block
+        + """
     @override
     @property
     def authenticator(self) -> _Auth:
 """,
     )
+    if "TAP_JIRA_CLIENT_CERT" not in patched:
+        fallback_auth_patterns = [
+            "    @override\n    @property\n    def authenticator(self) -> _Auth:\n",
+            "    @property\n    def authenticator(self):\n",
+        ]
+        for pattern in fallback_auth_patterns:
+            if pattern in patched:
+                patched = patched.replace(pattern, requests_session_block + pattern, 1)
+                break
 
     if patched == original:
         raise RuntimeError(f"Unable to patch tap-jira client runtime at {client_path}")
@@ -453,7 +478,7 @@ def generate_tap_jira_config(
         "secret": source_config.get("password", ""),
         "auth_type": auth_type,
         "projects": project_keys,
-        "start_date": extraction.get("start_date"),
+        "start_date": None if query_mode == "jql" else extraction.get("start_date"),
         "page_size_issues": extraction.get("batch_size", 100),
         "issues_jql": _build_jira_issues_jql(project_keys, raw_jql),
         "streams": selected_streams,
@@ -566,6 +591,11 @@ async def run_meltano_elt(
         )
         if env.get("REQUESTS_CA_BUNDLE"):
             env["TAP_JIRA_CA_BUNDLE"] = env["REQUESTS_CA_BUNDLE"]
+        client_cert = get_jira_client_certificate_material()
+        if client_cert:
+            env["TAP_JIRA_CLIENT_CERT"] = client_cert.cert_path
+            if client_cert.key_path:
+                env["TAP_JIRA_CLIENT_KEY"] = client_cert.key_path
 
         metadata: dict[str, dict] = {}
         select_rules: list[str] = []

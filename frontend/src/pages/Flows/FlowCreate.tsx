@@ -232,7 +232,7 @@ export default function FlowCreate() {
                 {source.source_type === "s3"
                   ? "S3"
                   : source.source_type === "jira"
-                    ? `Jira • ${source.jira_runtime_engine === "native" ? "Native PAT" : "Meltano Basic"}`
+                    ? `Jira • ${source.jira_runtime_engine === "native" ? "Native Jira" : "Meltano Basic"}`
                     : "PostgreSQL"}
                 )
               </option>
@@ -283,7 +283,6 @@ export default function FlowCreate() {
             </div>
             <JiraStreamSelector
               sourceId={selectedSourceId}
-              initialConfig={selectedSource?.extraction_config ?? undefined}
               config={jiraConfig}
               onChange={setJiraConfig}
               saveMode="none"

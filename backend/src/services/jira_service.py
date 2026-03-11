@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from src.core.client_cert import get_http_client_cert
 from src.core.http import get_http_client_ssl_context
 from src.schemas.jira import JiraErrorResponse, JiraProject, JiraStreamMetadata
 from src.services.jira_issue_normalization import (
@@ -165,6 +166,9 @@ class JiraService:
                 headers["Authorization"] = f"Bearer {self.api_token}"
         else:
             client_kwargs["auth"] = (username, self.api_token)
+        client_cert = get_http_client_cert()
+        if client_cert:
+            client_kwargs["cert"] = client_cert
         self.client = httpx.AsyncClient(
             base_url=normalized_base_url,
             headers=headers,

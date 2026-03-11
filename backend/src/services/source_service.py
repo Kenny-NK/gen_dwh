@@ -45,8 +45,8 @@ class SourceService:
 
     @classmethod
     def _get_jira_runtime_engine(cls, extraction_config: dict | None) -> str:
-        auth_type = cls._get_jira_auth_type(extraction_config)
-        return "native" if auth_type == "pat_bearer" else "meltano"
+        _ = cls._get_jira_auth_type(extraction_config)
+        return "native"
 
     @classmethod
     def _build_jira_extraction_config(
@@ -57,7 +57,7 @@ class SourceService:
     ) -> dict:
         payload = JiraExtractionConfig.model_validate(extraction_config or {}).model_dump(mode="json")
         payload["auth_type"] = cls._normalize_jira_auth_type(jira_auth_type)
-        payload["runtime_engine"] = "native" if payload["auth_type"] == "pat_bearer" else "meltano"
+        payload["runtime_engine"] = "native"
         return payload
 
     @staticmethod

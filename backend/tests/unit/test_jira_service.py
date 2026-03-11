@@ -1,5 +1,7 @@
 import httpx
+import pytest
 
+import src.services.jira_service as jira_service_module
 from src.services.jira_service import JiraService
 
 
@@ -40,6 +42,29 @@ def test_basic_password_uses_http_basic_auth() -> None:
     try:
         assert "Authorization" not in service.client.headers
         assert service.auth_type == "basic_password"
+    finally:
+        import asyncio
+
+        asyncio.run(service.aclose())
+
+
+def test_jira_service_uses_client_certificate(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class DummyAsyncClient:
+        def __init__(self, *args, **kwargs) -> None:
+            captured["cert"] = kwargs.get("cert")
+            self.headers = kwargs.get("headers", {})
+
+        async def aclose(self) -> None:
+            return None
+
+    monkeypatch.setattr(jira_service_module, "get_http_client_cert", lambda: ("/tmp/cert.pem", "/tmp/key.pem"))
+    monkeypatch.setattr(jira_service_module.httpx, "AsyncClient", DummyAsyncClient)
+
+    service = JiraService("https://example.atlassian.net", "tsarev.n", "secret", auth_type="basic_password")
+    try:
+        assert captured["cert"] == ("/tmp/cert.pem", "/tmp/key.pem")
     finally:
         import asyncio
 

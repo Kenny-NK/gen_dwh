@@ -33,6 +33,10 @@ export function JiraStreamSelector({
   const { showErrorToast } = useErrorToast();
   const [config, setConfig] = useState<JiraExtractionConfig>(defaultJiraExtractionConfig);
   const resolvedConfig = controlledConfig ?? config;
+  const normalizedInitialConfig = useMemo(
+    () => (initialConfig ? normalizeJiraExtractionConfig(initialConfig) : null),
+    [initialConfig]
+  );
 
   const updateConfig = useCallback(
     (next: JiraExtractionConfig | ((current: JiraExtractionConfig) => JiraExtractionConfig)) => {
@@ -57,9 +61,9 @@ export function JiraStreamSelector({
   });
 
   useEffect(() => {
-    if (!initialConfig) return;
-    updateConfig(normalizeJiraExtractionConfig(initialConfig));
-  }, [initialConfig, updateConfig]);
+    if (controlledConfig || onChange || !normalizedInitialConfig) return;
+    setConfig(normalizedInitialConfig);
+  }, [controlledConfig, normalizedInitialConfig, onChange]);
 
   const streamDeps = useMemo(() => {
     const deps = new Map<string, string>();

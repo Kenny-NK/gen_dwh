@@ -2,6 +2,7 @@ import asyncio
 
 import pytest
 
+from src.core.client_cert import ClientCertificateMaterial
 from src.services.meltano import (
     _build_jira_issues_jql,
     _detect_jira_api_version,
@@ -53,8 +54,36 @@ def test_normalize_jira_domain_preserves_context_path() -> None:
 def test_build_jira_issues_jql_combines_projects_and_custom_filter() -> None:
     assert (
         _build_jira_issues_jql(["dwhtot", "bill"], 'statusCategory != Done ORDER BY updated DESC')
-        == "(project in (BILL,DWHTOT)) AND ((statusCategory != Done ORDER BY updated DESC))"
+        == "(project in (BILL,DWHTOT)) AND ((statusCategory != Done))"
     )
+
+
+def test_build_jira_issues_jql_strips_ordering_for_tap_runtime() -> None:
+    assert (
+        _build_jira_issues_jql(
+            None,
+            'project = DWHTOT AND resolved >= "2025-11-01" AND resolved <= "2025-11-30" ORDER BY created DESC',
+        )
+        == '(project = DWHTOT AND resolved >= "2025-11-01" AND resolved <= "2025-11-30")'
+    )
+
+
+def test_generate_tap_jira_config_jql_mode_ignores_basic_filters() -> None:
+    config = generate_tap_jira_config(
+        source_config={"host": "https://sberworks.ru/jira", "username": "tsarev.n", "password": "secret"},
+        extraction_config={
+            "auth_type": "basic_password",
+            "streams": ["issues"],
+            "query_mode": "jql",
+            "project_keys": ["DWHTOT"],
+            "start_date": "2025-11-01T00:00:00Z",
+            "jql": 'project = DWHTOT AND status != "Cancelled" ORDER BY created DESC',
+        },
+    )
+
+    assert config["projects"] == []
+    assert config["start_date"] is None
+    assert config["issues_jql"] == '(project = DWHTOT AND status != "Cancelled")'
 
 
 def test_detect_jira_api_version_for_onprem_basic_password() -> None:
@@ -76,6 +105,7 @@ import requests.auth
 class JiraStream:
     instance_name: str
 
+    @override
     @property
     def url_base(self) -> str:
         cloud_id = self.config.get("cloud_id")
@@ -84,8 +114,9 @@ class JiraStream:
         domain = self.config["domain"]
         return f"https://{domain}/rest/api/3"
 
+    @override
     @property
-    def authenticator(self):
+    def authenticator(self) -> _Auth:
         return requests.auth.HTTPBasicAuth(
             password=self.config["api_token"],
             username=self.config["email"],
@@ -107,6 +138,8 @@ class JiraStream:
     assert "_gendwh_jira_runtime_patch" in patched_client
     assert "import os" in patched_client
     assert "import requests" in patched_client
+    assert 'client_cert = os.getenv("TAP_JIRA_CLIENT_CERT", "").strip()' in patched_client
+    assert 'self._requests_session.cert = (client_cert, client_key) if client_key else client_cert' in patched_client
     assert "_gendwh_jira_runtime_patch" in patched_streams
     assert 'return "/search" if api_version == "2" else "/search/jql"' in patched_streams
     assert 'params["startAt"] = next_page_token' in patched_streams
@@ -176,3 +209,104 @@ def test_run_meltano_elt_uses_force_for_jira(monkeypatch, tmp_path) -> None:
     assert captured["env"]["SSL_CERT_FILE"] == "/tmp/gendwh-ca-bundle.pem"
     assert captured["env"]["TAP_JIRA_API_VERSION"] == "2"
     assert captured["env"]["TAP_JIRA_CA_BUNDLE"] == "/tmp/gendwh-ca-bundle.pem"
+
+
+def test_run_meltano_elt_omits_start_date_for_jql_mode(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["cmd"] = cmd
+        captured["env"] = kwargs["env"]
+        return FakeProcess()
+
+    import src.services.meltano as meltano_module
+
+    monkeypatch.setattr(meltano_module, "MELTANO_PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(meltano_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(meltano_module, "_ensure_tap_jira_runtime", lambda env: asyncio.sleep(0))
+
+    result = asyncio.run(
+        run_meltano_elt(
+            source_config={
+                "host": "https://sberworks.ru/jira",
+                "username": "tsarev.n",
+                "password": "secret",
+                "extraction_config": {
+                    "auth_type": "basic_password",
+                    "streams": ["issues"],
+                    "query_mode": "jql",
+                    "project_keys": ["DWHTOT"],
+                    "start_date": "2025-11-01T00:00:00Z",
+                    "jql": 'project = DWHTOT AND status != "Cancelled" ORDER BY created DESC',
+                },
+            },
+            target_config={"schema": "public"},
+            state_id="test-state",
+            tables=[{"stream": "issues", "table": "issues"}],
+            source_type="jira",
+        )
+    )
+
+    assert result.success is True
+    assert "TAP_JIRA_START_DATE" not in captured["env"]
+    assert captured["env"]["TAP_JIRA_STREAM_OPTIONS_ISSUES_JQL"] == '(project = DWHTOT AND status != "Cancelled")'
+
+
+def test_run_meltano_elt_passes_client_certificate_paths(monkeypatch, tmp_path) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdout = asyncio.StreamReader()
+            self.stderr = asyncio.StreamReader()
+            self.stdout.feed_eof()
+            self.stderr.feed_eof()
+            self.returncode = 0
+
+        async def wait(self) -> int:
+            return 0
+
+    async def fake_create_subprocess_exec(*cmd, **kwargs):
+        captured["env"] = kwargs["env"]
+        return FakeProcess()
+
+    import src.services.meltano as meltano_module
+
+    monkeypatch.setattr(meltano_module, "MELTANO_PROJECT_DIR", tmp_path)
+    monkeypatch.setattr(meltano_module.asyncio, "create_subprocess_exec", fake_create_subprocess_exec)
+    monkeypatch.setattr(meltano_module, "_ensure_tap_jira_runtime", lambda env: asyncio.sleep(0))
+    monkeypatch.setattr(
+        meltano_module,
+        "get_jira_client_certificate_material",
+        lambda: ClientCertificateMaterial("/tmp/jira-client.crt.pem", "/tmp/jira-client.key.pem"),
+    )
+
+    result = asyncio.run(
+        run_meltano_elt(
+            source_config={
+                "host": "https://sberworks.ru/jira",
+                "username": "tsarev.n",
+                "password": "secret",
+                "extraction_config": {"auth_type": "basic_password", "streams": ["issues"]},
+            },
+            target_config={"schema": "public"},
+            state_id="test-state",
+            tables=[{"stream": "issues", "table": "issues"}],
+            source_type="jira",
+        )
+    )
+
+    assert result.success is True
+    assert captured["env"]["TAP_JIRA_CLIENT_CERT"] == "/tmp/jira-client.crt.pem"
+    assert captured["env"]["TAP_JIRA_CLIENT_KEY"] == "/tmp/jira-client.key.pem"

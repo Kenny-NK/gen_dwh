@@ -32,7 +32,7 @@ from src.services.connection import (
     decrypt_password,
     estimate_tables_row_count,
 )
-from src.services.jira_loader import run_jira_pat_to_postgres
+from src.services.jira_loader import run_jira_to_postgres
 from src.services.meltano import run_meltano_elt
 from src.services.record_flattening import normalize_identifier
 from src.services.run_service import RunService
@@ -650,12 +650,8 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
                         tables=tables,
                         progress_callback=_on_progress,
                     )
-                elif (
-                    source_type == "jira"
-                    and str(source_config.get("extraction_config", {}).get("auth_type") or "").lower()
-                    == "pat_bearer"
-                ):
-                    result = await run_jira_pat_to_postgres(
+                elif source_type == "jira":
+                    result = await run_jira_to_postgres(
                         source_config=source_config,
                         target_config=target_config,
                         tables=tables,

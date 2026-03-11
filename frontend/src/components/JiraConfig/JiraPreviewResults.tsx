@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Button } from "../common/Button";
 import { Table } from "../common/Table";
 import { useToast } from "../common/Toast";
+import { PreviewCellValue } from "../Preview/PreviewCellValue";
 import { useErrorToast } from "../../hooks/useErrorToast";
 import {
   buildJiraPreviewPayload,
@@ -28,17 +29,6 @@ function normalizeRows(rows: Array<Record<string, unknown>>): PreviewRow[] {
     ...row,
     id: String(row.id ?? row.issue_id ?? row.issue_key ?? index + 1),
   }));
-}
-
-function stringifyCellValue(value: unknown): string {
-  if (typeof value !== "object" || value === null) {
-    return String(value ?? "");
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "[Object]";
-  }
 }
 
 export function JiraPreviewResults({ sourceId, config, onPreviewReady, createFlowLink }: Props) {
@@ -110,7 +100,7 @@ export function JiraPreviewResults({ sourceId, config, onPreviewReady, createFlo
     return streamData.columns.map((key) => ({
       key,
       header: key,
-      render: (row: PreviewRow) => stringifyCellValue(row[key]),
+      render: (row: PreviewRow) => <PreviewCellValue value={row[key]} />,
     }));
   }, [streamData.columns]);
 

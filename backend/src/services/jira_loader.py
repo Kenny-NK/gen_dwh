@@ -188,16 +188,18 @@ def _resolve_upsert_column(
 ) -> str | None:
     stream_meta = JiraService.STREAMS.get(stream_name)
     primary_keys = list(stream_meta.primary_keys) if stream_meta else []
-    candidate_keys = [
-        str(global_upsert_key or "").strip(),
-        *primary_keys,
-        str(table_spec.get("replication_key") or "").strip(),
-        "issue_id",
-        "issue_key",
-        "id",
-        "accountId",
-        "key",
-    ]
+    candidate_keys = [str(global_upsert_key or "").strip()]
+    if stream_name == "issues":
+        candidate_keys.extend(["issue_id", "issue_key"])
+    candidate_keys.extend(
+        [
+            *primary_keys,
+            str(table_spec.get("replication_key") or "").strip(),
+            "id",
+            "accountId",
+            "key",
+        ]
+    )
     normalized_columns = set(columns) | {"_record_id", "_cursor_value", "_raw"}
     for candidate in candidate_keys:
         if not candidate:
@@ -314,7 +316,7 @@ async def _store_stream_records(
     return inserted, max_cursor
 
 
-async def run_jira_pat_to_postgres(
+async def run_jira_to_postgres(
     source_config: dict,
     target_config: dict,
     tables: list[dict] | None = None,
@@ -325,8 +327,6 @@ async def run_jira_pat_to_postgres(
         return JiraLoadResult(success=False, error_message="Для потока не выбраны Jira streams")
 
     extraction = JiraExtractionConfig.model_validate(source_config.get("extraction_config") or {})
-    if extraction.auth_type != "pat_bearer":
-        return JiraLoadResult(success=False, error_message="Native Jira extractor supports only PAT auth")
 
     target_schema = normalize_identifier(str(target_config.get("schema") or "public"), "public")
     write_mode = str(target_config.get("write_mode") or "append").lower()
@@ -342,7 +342,7 @@ async def run_jira_pat_to_postgres(
         str(source_config.get("host") or ""),
         str(source_config.get("username") or ""),
         str(source_config.get("password") or ""),
-        auth_type="pat_bearer",
+        auth_type=extraction.auth_type,
     ) as jira:
         try:
             stream_payloads = await jira.extract_records(
@@ -408,4 +408,19 @@ async def run_jira_pat_to_postgres(
         source_records_total=records_processed,
         tables_processed=tables_processed,
         last_cursor_values=last_cursor_values,
+    )
+
+
+async def run_jira_pat_to_postgres(
+    source_config: dict,
+    target_config: dict,
+    tables: list[dict] | None = None,
+    progress_callback: Callable[[int, int | None], Awaitable[None]] | None = None,
+) -> JiraLoadResult:
+    """Backward-compatible alias for older call sites."""
+    return await run_jira_to_postgres(
+        source_config=source_config,
+        target_config=target_config,
+        tables=tables,
+        progress_callback=progress_callback,
     )
