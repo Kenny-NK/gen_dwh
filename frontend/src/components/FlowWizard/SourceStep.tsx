@@ -22,7 +22,7 @@ interface SourceStepProps {
 export function SourceStep({ selectedSourceId, onSelect }: SourceStepProps) {
   const { data: sources = [] } = useQuery<Source[]>({
     queryKey: ["sources", { status: "valid" }],
-    queryFn: () => api.get("/sources?status=valid").then((r) => r.data),
+    queryFn: () => api.get("/sources?status=valid").then((r) => r.data.items ?? []),
   });
 
   return (

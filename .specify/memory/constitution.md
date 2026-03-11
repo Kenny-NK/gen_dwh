@@ -2,13 +2,14 @@
 ============================================================================
 SYNC IMPACT REPORT
 ============================================================================
-Version change: Initial (template) → 1.0.0
+Version change: 1.0.0 → 1.1.0
+
+Modified principles: None renamed
 
 Added sections:
-  - Core Principles (6 principles)
-  - Technology Stack
-  - Data Architecture
-  - Governance
+  - Principle VII: UI-Consistent Connector Experience
+
+Removed sections: None
 
 Templates requiring updates:
   - .specify/templates/plan-template.md: ✅ Compatible (Constitution Check section exists)
@@ -16,6 +17,10 @@ Templates requiring updates:
   - .specify/templates/tasks-template.md: ✅ Compatible (phase structure supports principles)
 
 Follow-up TODOs: None
+
+Rationale for MINOR bump: New principle (VII) added without removing or
+redefining existing principles. This materially expands guidance for
+connector development.
 ============================================================================
 -->
 
@@ -83,6 +88,26 @@ Pipeline status MUST be queryable through the API and visible in the UI.
 
 **Rationale**: Data pipeline failures must be detectable and debuggable without SSH access to servers.
 
+### VII. UI-Consistent Connector Experience
+
+All data source connectors MUST follow a unified UX flow through the web interface. Every connector MUST provide:
+
+1. **Credential Configuration UI**: Users MUST be able to input and save connection credentials (URL, authentication tokens, API keys) through a dedicated form in the UI. No manual configuration files or CLI commands required.
+
+2. **Loading Parameters UI**: Users MUST be able to configure data loading settings (projects, entities, filters, date ranges, incremental options) through UI controls. All connector-specific options MUST be exposed as form fields.
+
+3. **Preview Before Commit**: Users MUST be able to preview data BEFORE creating a flow. The preview MUST validate connectivity, show sample data, and confirm configuration correctness. Failed previews MUST display actionable error messages.
+
+4. **Flow Creation Flow**: After successful preview, users MUST be able to create a data flow using the same wizard/process as existing connectors. No connector-specific deviation in the flow creation UX.
+
+**Non-Negotiable Requirements**:
+- Zero manual configuration outside the UI for end-to-end connector setup
+- Consistent error handling and validation patterns across all connectors
+- Preview MUST work for any connector before flow is persisted
+- Connector-specific settings MUST be documented in the UI (tooltips, help text)
+
+**Rationale**: Consistent UX reduces training overhead and enables non-technical users to configure new data sources without engineering support. Deviations create confusion and increase support burden.
+
 ## Technology Stack
 
 ### Mandatory Technologies
@@ -95,6 +120,14 @@ Pipeline status MUST be queryable through the API and visible in the UI.
 | System Database | PostgreSQL | 15+ |
 | Business Database | PostgreSQL | 15+ |
 | Container Runtime | Docker + Docker Compose | 24+ / 2.x |
+
+### Supported Connectors
+
+| Source Type | Meltano Tap | UI Support |
+|-------------|-------------|------------|
+| PostgreSQL | tap-postgres | Full UI flow |
+| S3 (CSV/XLSX) | tap-s3-csv | Full UI flow |
+| Jira | tap-jira | Full UI flow (planned) |
 
 ### Technology Decisions
 
@@ -149,4 +182,4 @@ External Sources → Meltano Extractors → FastAPI Orchestration → Business P
 - **MINOR**: New principles or materially expanded guidance
 - **PATCH**: Clarifications, wording fixes, non-semantic refinements
 
-**Version**: 1.0.0 | **Ratified**: 2026-02-26 | **Last Amended**: 2026-02-26
+**Version**: 1.1.0 | **Ratified**: 2026-02-26 | **Last Amended**: 2026-03-05

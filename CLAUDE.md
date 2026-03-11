@@ -3,6 +3,8 @@
 Auto-generated from all feature plans. Last updated: 2026-03-01
 
 ## Active Technologies
+- Python 3.12 (backend), TypeScript 5.x (frontend) + FastAPI 0.109+, SQLAlchemy 2.0 (async), React 18, Meltano 3.x, tap-jira (003-jira-connector)
+- PostgreSQL 15+ (System DB for config, Business DB for extracted data) (003-jira-connector)
 
 - Python 3.12 (backend), TypeScript 5.x (frontend) + FastAPI 0.109+, Meltano 3.x, SQLAlchemy 2.0 (async), Celery + Redis, React 18 + Vite, Keycloak OIDC (001-data-pipeline-mvp)
 
@@ -23,6 +25,7 @@ cd src [ONLY COMMANDS FOR ACTIVE TECHNOLOGIES][ONLY COMMANDS FOR ACTIVE TECHNOLO
 Python 3.12 (backend), TypeScript 5.x (frontend): Follow standard conventions
 
 ## Recent Changes
+- 003-jira-connector: Added Python 3.12 (backend), TypeScript 5.x (frontend) + FastAPI 0.109+, SQLAlchemy 2.0 (async), React 18, Meltano 3.x, tap-jira
 
 - 001-data-pipeline-mvp: Added Python 3.12 (backend), TypeScript 5.x (frontend) + FastAPI 0.109+, Meltano 3.x, SQLAlchemy 2.0 (async), Celery + Redis, React 18 + Vite, Keycloak OIDC
 

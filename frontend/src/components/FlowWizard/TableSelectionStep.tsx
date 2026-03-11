@@ -27,14 +27,21 @@ export function TableSelectionStep({
 
   const { data: schemas = [] } = useQuery<string[]>({
     queryKey: ["source-schemas", sourceId],
-    queryFn: () => api.get(`/sources/${sourceId}/schemas`).then((r) => r.data),
+    queryFn: () =>
+      api.get(`/sources/${sourceId}/schemas`).then((r) => {
+        const payload = r.data;
+        return Array.isArray(payload?.schemas) ? payload.schemas : [];
+      }),
     enabled: !!sourceId,
   });
 
   const { data: tables = [] } = useQuery<TableInfo[]>({
     queryKey: ["source-tables", sourceId, selectedSchema],
     queryFn: () =>
-      api.get(`/sources/${sourceId}/schemas/${selectedSchema}/tables`).then((r) => r.data),
+      api.get(`/sources/${sourceId}/schemas/${selectedSchema}/tables`).then((r) => {
+        const payload = r.data;
+        return Array.isArray(payload?.tables) ? payload.tables : [];
+      }),
     enabled: !!sourceId && !!selectedSchema,
   });
 
