@@ -2,8 +2,8 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
-COPY package.json pnpm-lock.yaml* ./
-RUN corepack enable && pnpm install --frozen-lockfile 2>/dev/null || npm install
+COPY package.json package-lock.json ./
+RUN npm ci
 
 COPY . .
 RUN npm run build
@@ -11,13 +11,16 @@ RUN npm run build
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
 COPY <<'EOF' /etc/nginx/conf.d/default.conf
+resolver 127.0.0.11 ipv6=off valid=10s;
+
 server {
     listen 80;
     root /usr/share/nginx/html;
     index index.html;
 
     location /api {
-        proxy_pass http://backend:8000;
+        set $backend_upstream http://backend:8000;
+        proxy_pass $backend_upstream;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
     }

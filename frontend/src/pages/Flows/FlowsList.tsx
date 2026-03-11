@@ -4,13 +4,16 @@
 
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import api, { extractApiErrorMessage } from "../../services/api";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import api from "../../services/api";
 import { Button } from "../../components/common/Button";
 import { Table } from "../../components/common/Table";
 import { FlowStatusBadge } from "../../components/FlowStatusBadge";
 import { Modal } from "../../components/common/Modal";
 import { useToast } from "../../components/common/Toast";
+import { useErrorToast } from "../../hooks/useErrorToast";
+import { writeModeLabels } from "../../constants/labels";
+import { useListWithPagination } from "../../hooks/useListWithPagination";
 
 interface Flow {
   id: string;
@@ -23,28 +26,24 @@ interface Flow {
   [key: string]: unknown;
 }
 
-const writeModeLabels: Record<string, string> = {
-  append: "Добавление",
-  upsert: "Обновление и вставка",
-  replace: "Перезапись",
-};
-
 export default function FlowsList() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { addToast } = useToast();
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
+  const { showErrorToast } = useErrorToast();
   const [deleteTarget, setDeleteTarget] = useState<Flow | null>(null);
   const [dropTargetTables, setDropTargetTables] = useState(false);
-  const pageSize = 20;
-
-  const { data: flows = [], isLoading } = useQuery<Flow[]>({
-    queryKey: ["flows", page],
-    queryFn: () =>
-      api
-        .get("/flows", { params: { limit: pageSize, offset: (page - 1) * pageSize } })
-        .then((r) => r.data),
+  const {
+    items: flows,
+    isLoading,
+    page,
+    hasNextPage,
+    search,
+    setPage,
+    setSearch,
+  } = useListWithPagination<Flow>({
+    queryKey: ["flows"],
+    endpoint: "/flows",
   });
 
   const deleteMutation = useMutation({
@@ -61,7 +60,7 @@ export default function FlowsList() {
       setDropTargetTables(false);
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось удалить поток"));
+      showErrorToast(error, "Не удалось удалить поток");
     },
   });
 
@@ -146,7 +145,7 @@ export default function FlowsList() {
         <Button
           variant="secondary"
           onClick={() => setPage((p) => p + 1)}
-          disabled={flows.length < pageSize}
+          disabled={!hasNextPage}
         >
           Далее
         </Button>

@@ -5,11 +5,15 @@
 import React from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import api, { extractApiErrorMessage } from "../../services/api";
+import api, { extractItems } from "../../services/api";
 import { Button } from "../../components/common/Button";
 import { RunStatus } from "../../components/RunStatus";
 import { RunProgressBar } from "../../components/RunProgressBar";
 import { useToast } from "../../components/common/Toast";
+import { triggerLabels } from "../../constants/labels";
+import { useErrorToast } from "../../hooks/useErrorToast";
+import { formatDateTime } from "../../utils/formatDate";
+import { formatCompactNumberRu, formatNumberRu } from "../../utils/numberFormat";
 
 interface RunDetailResponse {
   id: string;
@@ -29,16 +33,11 @@ interface RunDetailResponse {
   created_at: string;
 }
 
-const triggerLabels: Record<string, string> = {
-  manual: "Вручную",
-  retry: "Повтор",
-  scheduled: "По расписанию",
-};
-
 export default function RunDetail() {
   const { id } = useParams();
   const queryClient = useQueryClient();
   const { addToast } = useToast();
+  const { showErrorToast } = useErrorToast();
 
   const { data: run, isLoading } = useQuery<RunDetailResponse>({
     queryKey: ["run", id],
@@ -53,7 +52,8 @@ export default function RunDetail() {
   const flowId = run?.flow_id as string | undefined;
   const { data: flowTables = [] } = useQuery<Array<{ id: string }>>({
     queryKey: ["flow-tables", flowId],
-    queryFn: () => api.get(`/flows/${flowId}/tables`).then((r) => r.data),
+    queryFn: () =>
+      api.get(`/flows/${flowId}/tables`).then((r) => extractItems(r.data)),
     enabled: Boolean(flowId),
   });
 
@@ -67,7 +67,7 @@ export default function RunDetail() {
       addToast("success", "Запуск отменен");
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось отменить запуск"));
+      showErrorToast(error, "Не удалось отменить запуск");
     },
   });
 
@@ -81,7 +81,7 @@ export default function RunDetail() {
       addToast("success", "Запуск отправлен на повтор");
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось повторить запуск"));
+      showErrorToast(error, "Не удалось повторить запуск");
     },
   });
 
@@ -91,7 +91,7 @@ export default function RunDetail() {
   return (
     <div>
       <div className="mb-6 flex items-center justify-between">
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-2xl font-bold text-slate-900 dark:text-slate-100">Запуск #{run.run_number}</h1>
           <RunStatus
             status={run.status}
@@ -142,22 +142,26 @@ export default function RunDetail() {
         <div>
           <span className="text-sm text-slate-500 dark:text-slate-400">Начат</span>
           <div className="font-medium text-slate-900 dark:text-slate-100">
-            {run.started_at ? new Date(run.started_at).toLocaleString() : "—"}
+            {formatDateTime(run.started_at)}
           </div>
         </div>
         <div>
           <span className="text-sm text-slate-500 dark:text-slate-400">Завершен</span>
           <div className="font-medium text-slate-900 dark:text-slate-100">
-            {run.completed_at ? new Date(run.completed_at).toLocaleString() : "—"}
+            {formatDateTime(run.completed_at)}
           </div>
         </div>
         <div>
           <span className="text-sm text-slate-500 dark:text-slate-400">Обработано записей</span>
-          <div className="font-medium text-slate-900 dark:text-slate-100">{run.records_processed?.toLocaleString() || 0}</div>
+          <div className="font-medium text-slate-900 dark:text-slate-100" title={formatNumberRu(run.records_processed)}>
+            {formatCompactNumberRu(run.records_processed)}
+          </div>
         </div>
         <div>
           <span className="text-sm text-slate-500 dark:text-slate-400">Записей с ошибкой</span>
-          <div className="font-medium text-slate-900 dark:text-slate-100">{run.records_failed?.toLocaleString() || 0}</div>
+          <div className="font-medium text-slate-900 dark:text-slate-100" title={formatNumberRu(run.records_failed)}>
+            {formatCompactNumberRu(run.records_failed)}
+          </div>
         </div>
       </div>
 

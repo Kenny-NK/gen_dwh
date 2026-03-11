@@ -9,10 +9,12 @@ import { AuthProvider, useAuth } from "react-oidc-context";
 import { WebStorageStateStore } from "oidc-client-ts";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
+import { WorkspaceSelector } from "./components/auth/WorkspaceSelector";
 import { Layout } from "./components/Layout";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { ToastProvider } from "./components/common/Toast";
 import "./i18n";
+import api from "./services/api";
 import { MemoryStateStore } from "./services/memoryStore";
 import "./styles.css";
 
@@ -26,6 +28,7 @@ const FlowCreate = React.lazy(() => import("./pages/Flows/FlowCreate"));
 const RunsList = React.lazy(() => import("./pages/Runs/RunsList"));
 const RunDetail = React.lazy(() => import("./pages/Runs/RunDetail"));
 const AuditLog = React.lazy(() => import("./pages/Audit/AuditLog"));
+const UsersRoles = React.lazy(() => import("./pages/Admin/UsersRoles"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -65,6 +68,43 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const sessionInitialized = React.useRef(false);
   const [sessionReady, setSessionReady] = React.useState(false);
   const [sessionInitFailed, setSessionInitFailed] = React.useState(false);
+  const [requiresWorkspaceSelection, setRequiresWorkspaceSelection] = React.useState(false);
+
+  type SessionBootstrap = {
+    status: string;
+    active_workspace_id: string | null;
+    workspace_count: number;
+    requires_workspace_selection: boolean;
+  };
+
+  const initializeSession = React.useCallback(async (accessToken: string): Promise<SessionBootstrap> => {
+    const retryableStatuses = new Set([502, 503, 504]);
+    const maxAttempts = 12;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      try {
+        const response = await api.post<SessionBootstrap>("/auth/session", undefined, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        });
+        return response.data;
+      } catch (error) {
+        const status = (error as { response?: { status?: number } }).response?.status;
+        const shouldRetry = status === undefined || retryableStatuses.has(status);
+        if (!shouldRetry || attempt === maxAttempts - 1) {
+          throw new Error("Failed to initialize server session");
+        }
+      }
+
+      await new Promise((resolve) => {
+        const delayMs = Math.min(1000 * (attempt + 1), 5000);
+        window.setTimeout(resolve, delayMs);
+      });
+    }
+
+    throw new Error("Failed to initialize server session");
+  }, []);
 
   React.useEffect(() => {
     if (isLoading || isAuthenticated) {
@@ -91,6 +131,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
         setSessionReady(false);
       }
       setSessionInitFailed(false);
+      setRequiresWorkspaceSelection(false);
       return;
     }
 
@@ -104,19 +145,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     setSessionInitFailed(false);
 
-    void fetch("/api/v1/auth/session", {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        Authorization: `Bearer ${user.access_token}`,
-      },
-    })
+    void initializeSession(user.access_token)
       .then((resp) => {
-        if (!resp.ok) {
-          throw new Error("Failed to initialize server session");
-        }
         if (!cancelled) {
           sessionInitialized.current = true;
+          setRequiresWorkspaceSelection(Boolean(resp.requires_workspace_selection));
           setSessionReady(true);
         }
       })
@@ -135,7 +168,7 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [isAuthenticated, user?.access_token]);
+  }, [activeNavigator, initializeSession, isAuthenticated, user?.access_token]);
 
   if (isLoading) {
     return <div className="flex h-screen items-center justify-center">Загрузка...</div>;
@@ -155,6 +188,10 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
   if (!sessionReady) {
     return <div className="flex h-screen items-center justify-center">Инициализация сессии...</div>;
+  }
+
+  if (requiresWorkspaceSelection) {
+    return <WorkspaceSelector />;
   }
 
   return <>{children}</>;
@@ -184,6 +221,7 @@ function App() {
             <Route path="/flows/:id/runs" element={<RunsList />} />
             <Route path="/runs" element={<RunsList />} />
             <Route path="/runs/:id" element={<RunDetail />} />
+            <Route path="/admin/users-roles" element={<UsersRoles />} />
             <Route path="/audit" element={<AuditLog />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />

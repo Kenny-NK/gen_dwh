@@ -10,6 +10,7 @@ import { Button } from "../../components/common/Button";
 import { FlowsWidget } from "./FlowsWidget";
 import { SourcesWidget } from "./SourcesWidget";
 import { RunsWidget } from "./RunsWidget";
+import { formatCompactNumberRu } from "../../utils/numberFormat";
 
 export default function Dashboard() {
   const navigate = useNavigate();
@@ -54,7 +55,7 @@ export default function Dashboard() {
           <div className="app-card p-4">
             <div className="text-sm text-slate-500 dark:text-slate-400">Обработано записей</div>
             <div className="text-2xl font-bold text-slate-900 dark:text-slate-100">
-              {(stats.total_records_processed || 0).toLocaleString()}
+              {formatCompactNumberRu(stats.total_records_processed || 0)}
             </div>
           </div>
         </div>

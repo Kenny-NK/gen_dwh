@@ -19,6 +19,40 @@ type ErrorPayload = {
   error_id?: string;
 };
 
+export function extractItems<T>(data: unknown): T[] {
+  if (Array.isArray(data)) {
+    return data as T[];
+  }
+  if (typeof data !== "object" || data === null) {
+    return [];
+  }
+  const items = (data as { items?: unknown }).items;
+  return Array.isArray(items) ? (items as T[]) : [];
+}
+
+export function extractListResponse<T>(data: unknown): { items: T[]; total: number | null } {
+  if (Array.isArray(data)) {
+    return {
+      items: data as T[],
+      total: data.length,
+    };
+  }
+
+  if (typeof data !== "object" || data === null) {
+    return {
+      items: [],
+      total: null,
+    };
+  }
+
+  const items = extractItems<T>(data);
+  const rawTotal = (data as { total?: unknown }).total;
+  return {
+    items,
+    total: typeof rawTotal === "number" && Number.isFinite(rawTotal) ? rawTotal : null,
+  };
+}
+
 // Response interceptor - handle 401
 api.interceptors.response.use(
   (response) => response,

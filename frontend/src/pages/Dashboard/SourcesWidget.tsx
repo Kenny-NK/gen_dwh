@@ -5,22 +5,30 @@
 import React from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import api from "../../services/api";
+import api, { extractItems } from "../../services/api";
 import { ConnectionStatus } from "../../components/ConnectionStatus";
+
+type SourceSummary = {
+  id: string;
+  name: string;
+  host: string;
+  database: string;
+  connection_status: string;
+};
 
 export function SourcesWidget() {
   const navigate = useNavigate();
 
-  const { data: sources = [] } = useQuery({
+  const { data: sources = [] } = useQuery<SourceSummary[]>({
     queryKey: ["dashboard-sources"],
-    queryFn: () => api.get("/sources").then((r) => r.data),
+    queryFn: () => api.get("/sources").then((r) => extractItems<SourceSummary>(r.data)),
   });
 
   return (
     <div className="app-card p-4">
       <h2 className="mb-4 text-lg font-semibold text-slate-900 dark:text-slate-100">Источники</h2>
       <div className="space-y-2">
-        {sources.slice(0, 5).map((s: Record<string, unknown>) => (
+        {sources.slice(0, 5).map((s) => (
           <div
             key={String(s.id)}
             className="flex cursor-pointer items-center justify-between rounded-lg p-2 transition hover:bg-slate-50 dark:hover:bg-slate-800"

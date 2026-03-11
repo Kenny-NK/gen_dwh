@@ -4,7 +4,8 @@
 
 import React, { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import api, { extractApiErrorMessage } from "../../services/api";
+import api from "../../services/api";
+import { ApiErrorNotice } from "../common/ApiErrorNotice";
 import { MaskedValue } from "./MaskedValue";
 
 interface PreviewProps {
@@ -53,9 +54,11 @@ export function Preview({ flowId, sessionId, tables }: PreviewProps) {
   if (isLoading) return <div>Загрузка предпросмотра...</div>;
   if (isError) {
     return (
-      <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950/30 dark:text-rose-200">
-        {extractApiErrorMessage(error, "Не удалось загрузить предпросмотр")}
-      </div>
+      <ApiErrorNotice
+        error={error}
+        fallback="Не удалось загрузить предпросмотр"
+        className="rounded-lg p-3 dark:border-rose-900 dark:bg-rose-950/30"
+      />
     );
   }
 

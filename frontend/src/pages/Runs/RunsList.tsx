@@ -2,13 +2,14 @@
  * Runs history page (T095).
  */
 
-import React, { useState } from "react";
+import React from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
-import api from "../../services/api";
+import { triggerLabels } from "../../constants/labels";
+import { useListWithPagination } from "../../hooks/useListWithPagination";
 import { Table } from "../../components/common/Table";
 import { RunStatus } from "../../components/RunStatus";
 import { RunProgressBar } from "../../components/RunProgressBar";
+import { formatDateTime } from "../../utils/formatDate";
 
 interface Run {
   id: string;
@@ -26,31 +27,22 @@ interface Run {
   [key: string]: unknown;
 }
 
-const triggerLabels: Record<string, string> = {
-  manual: "Вручную",
-  retry: "Повтор",
-  scheduled: "По расписанию",
-};
-
 export default function RunsList() {
   const navigate = useNavigate();
   const { id: flowId } = useParams();
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const pageSize = 20;
-
-  const { data: runs = [], isLoading } = useQuery<Run[]>({
-    queryKey: ["runs", flowId ?? "all", page],
-    queryFn: () =>
-      api
-        .get(flowId ? `/flows/${flowId}/runs` : "/runs", {
-          params: { limit: pageSize, offset: (page - 1) * pageSize },
-        })
-        .then((r) => r.data),
-    refetchInterval: (query) => {
-      const data = query.state.data as Run[] | undefined;
-      return data?.some((run) => ["pending", "running"].includes(run.status)) ? 5000 : false;
-    },
+  const {
+    items: runs,
+    isLoading,
+    page,
+    hasNextPage,
+    search,
+    setPage,
+    setSearch,
+  } = useListWithPagination<Run>({
+    queryKey: ["runs", flowId ?? "all"],
+    endpoint: flowId ? `/flows/${flowId}/runs` : "/runs",
+    refetchInterval: (items) =>
+      items.some((run) => ["pending", "running"].includes(run.status)) ? 5000 : false,
   });
 
   const columns = [
@@ -64,7 +56,7 @@ export default function RunsList() {
       key: "status",
       header: "Статус",
       render: (r: Run) => (
-        <div className="min-w-[220px]">
+        <div className="w-full min-w-[280px] max-w-[420px]">
           <RunStatus status={r.status} recordsProcessed={r.records_processed} />
           <RunProgressBar
             status={r.status}
@@ -82,7 +74,7 @@ export default function RunsList() {
     {
       key: "created_at",
       header: "Создан",
-      render: (r: Run) => new Date(r.created_at).toLocaleString(),
+      render: (r: Run) => formatDateTime(r.created_at),
     },
   ];
 
@@ -129,7 +121,7 @@ export default function RunsList() {
         <button
           className="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 disabled:opacity-50 dark:border-slate-700 dark:text-slate-300"
           onClick={() => setPage((p) => p + 1)}
-          disabled={runs.length < pageSize}
+          disabled={!hasNextPage}
         >
           Далее
         </button>

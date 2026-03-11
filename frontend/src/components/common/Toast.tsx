@@ -2,7 +2,7 @@
  * Toast notification system (T118).
  */
 
-import React, { createContext, useCallback, useContext, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 
 interface Toast {
   id: number;
@@ -20,24 +20,41 @@ let toastId = 0;
 
 export function ToastProvider({ children }: { children: React.ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const timersRef = useRef<Map<number, number>>(new Map());
+
+  const removeToast = useCallback((id: number) => {
+    const timerId = timersRef.current.get(id);
+    if (timerId !== undefined) {
+      window.clearTimeout(timerId);
+      timersRef.current.delete(id);
+    }
+    setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  useEffect(() => {
+    const timers = timersRef.current;
+    return () => {
+      for (const timerId of timers.values()) {
+        window.clearTimeout(timerId);
+      }
+      timers.clear();
+    };
+  }, []);
 
   const addToast = useCallback((type: Toast["type"], message: string) => {
     const id = ++toastId;
     setToasts((prev) => [...prev, { id, type, message }]);
-    setTimeout(() => {
-      setToasts((prev) => prev.filter((t) => t.id !== id));
+    const timerId = window.setTimeout(() => {
+      removeToast(id);
     }, 5000);
-  }, []);
+    timersRef.current.set(id, timerId);
+  }, [removeToast]);
 
   const typeStyles = {
     success: "bg-green-500",
     error: "bg-red-500",
     info: "bg-blue-500",
   };
-
-  const removeToast = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
-  }, []);
 
   return (
     <ToastContext.Provider value={{ addToast }}>

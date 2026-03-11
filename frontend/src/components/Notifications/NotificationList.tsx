@@ -6,6 +6,7 @@ import React from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import api from "../../services/api";
+import { formatDateTime } from "../../utils/formatDate";
 
 interface NotificationListProps {
   onClose: () => void;
@@ -71,7 +72,7 @@ export function NotificationList({ onClose }: NotificationListProps) {
             <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{n.title}</div>
             <div className="text-xs text-slate-500 dark:text-slate-400">{n.message}</div>
             <div className="mt-1 text-xs text-slate-400 dark:text-slate-500">
-              {new Date(n.created_at).toLocaleString()}
+              {formatDateTime(n.created_at)}
             </div>
           </div>
         ))}

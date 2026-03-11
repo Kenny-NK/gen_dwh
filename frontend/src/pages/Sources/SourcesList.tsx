@@ -4,18 +4,21 @@
 
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import api from "../../services/api";
 import { Button } from "../../components/common/Button";
 import { Table } from "../../components/common/Table";
 import { Modal } from "../../components/common/Modal";
 import { ConnectionStatus } from "../../components/ConnectionStatus";
 import { useToast } from "../../components/common/Toast";
+import { useErrorToast } from "../../hooks/useErrorToast";
+import { useListWithPagination } from "../../hooks/useListWithPagination";
 
 interface Source {
   id: string;
   name: string;
   description?: string | null;
+  source_type?: string;
   host: string;
   port: number;
   database: string;
@@ -28,31 +31,40 @@ export default function SourcesList() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { addToast } = useToast();
+  const { showErrorToast } = useErrorToast();
   const [deleteId, setDeleteId] = useState<string | null>(null);
-  const [search, setSearch] = useState("");
-  const [page, setPage] = useState(1);
-  const pageSize = 20;
-
-  const { data: sources = [], isLoading } = useQuery<Source[]>({
-    queryKey: ["sources", page],
-    queryFn: () =>
-      api
-        .get("/sources", { params: { limit: pageSize, offset: (page - 1) * pageSize } })
-        .then((r) => r.data),
+  const [hardDelete, setHardDelete] = useState(false);
+  const {
+    items: sources,
+    isLoading,
+    page,
+    hasNextPage,
+    search,
+    setPage,
+    setSearch,
+  } = useListWithPagination<Source>({
+    queryKey: ["sources"],
+    endpoint: "/sources",
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => api.delete(`/sources/${id}`),
+    mutationFn: (payload: { id: string; hardDelete: boolean }) =>
+      api.delete(`/sources/${payload.id}`, {
+        params: { hard_delete: payload.hardDelete },
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sources"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-sources"] });
       addToast("success", "Источник удален");
       setDeleteId(null);
+      setHardDelete(false);
     },
-    onError: () => {
-      addToast("error", "Не удалось удалить источник");
+    onError: (error: unknown) => {
+      showErrorToast(error, "Не удалось удалить источник");
     },
   });
+
+  const selectedForDeletion = sources.find((source) => source.id === deleteId) ?? null;
 
   const columns = [
     { key: "name", header: "Название" },
@@ -89,6 +101,7 @@ export default function SourcesList() {
             onClick={(e) => {
               e.stopPropagation();
               setDeleteId(s.id);
+              setHardDelete(false);
             }}
           >
             Удалить
@@ -140,7 +153,7 @@ export default function SourcesList() {
         <Button
           variant="secondary"
           onClick={() => setPage((p) => p + 1)}
-          disabled={sources.length < pageSize}
+          disabled={!hasNextPage}
         >
           Далее
         </Button>
@@ -148,23 +161,48 @@ export default function SourcesList() {
 
       <Modal
         isOpen={deleteId !== null}
-        onClose={() => setDeleteId(null)}
+        onClose={() => {
+          setDeleteId(null);
+          setHardDelete(false);
+        }}
         title="Удаление источника"
       >
         <p className="mb-3 text-sm text-slate-700 dark:text-slate-300">
           Вы уверены, что хотите удалить источник?
         </p>
         <p className="mb-4 text-xs text-amber-700 dark:text-amber-300">
-          Внимание: это действие необратимо. Потоки, связанные с этим источником, больше не смогут выполняться.
+          Внимание: это действие необратимо.
+          {selectedForDeletion?.source_type === "jira"
+            ? " Для Jira-источников с активными потоками удаление будет заблокировано."
+            : " Потоки, связанные с этим источником, больше не смогут выполняться."}
         </p>
+        <label className="mb-4 flex items-start gap-3 rounded-lg border border-rose-200 bg-rose-50 px-3 py-3 text-sm text-rose-900 dark:border-rose-900/70 dark:bg-rose-950/30 dark:text-rose-100">
+          <input
+            type="checkbox"
+            checked={hardDelete}
+            onChange={(event) => setHardDelete(event.target.checked)}
+            className="mt-0.5 h-4 w-4 rounded border-rose-400 text-rose-600 focus:ring-rose-500"
+          />
+          <span>
+            <strong>Hard delete</strong>: удалить источник и его credential из нашего проекта без возможности восстановления.
+          </span>
+        </label>
         <div className="flex justify-end gap-2">
-          <Button variant="secondary" onClick={() => setDeleteId(null)}>
+          <Button
+            variant="secondary"
+            onClick={() => {
+              setDeleteId(null);
+              setHardDelete(false);
+            }}
+          >
             Отмена
           </Button>
           <Button
             variant="danger"
             loading={deleteMutation.isPending}
-            onClick={() => deleteId && deleteMutation.mutate(deleteId)}
+            onClick={() =>
+              deleteId && deleteMutation.mutate({ id: deleteId, hardDelete })
+            }
           >
             Удалить
           </Button>

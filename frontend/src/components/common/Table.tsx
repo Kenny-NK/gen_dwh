@@ -10,14 +10,18 @@ interface Column<T> {
   render?: (item: T) => React.ReactNode;
 }
 
-interface TableProps<T> {
+type TableRow = Record<string, unknown> & {
+  id: string | number;
+};
+
+interface TableProps<T extends TableRow> {
   columns: Column<T>[];
   data: T[];
   onRowClick?: (item: T) => void;
   emptyMessage?: string;
 }
 
-export function Table<T extends Record<string, unknown>>({
+export function Table<T extends TableRow>({
   columns,
   data,
   onRowClick,
@@ -44,9 +48,9 @@ export function Table<T extends Record<string, unknown>>({
           </tr>
         </thead>
         <tbody className="divide-y divide-slate-200 dark:divide-slate-800">
-          {data.map((item, i) => (
+          {data.map((item) => (
             <tr
-              key={String(item.id ?? i)}
+              key={String(item.id)}
               className={onRowClick ? "cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/70" : ""}
               onClick={() => onRowClick?.(item)}
               tabIndex={onRowClick ? 0 : undefined}

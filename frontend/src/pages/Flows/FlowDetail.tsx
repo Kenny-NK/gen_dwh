@@ -5,11 +5,13 @@
 import React, { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import api, { extractApiErrorMessage } from "../../services/api";
+import api, { extractItems } from "../../services/api";
 import { Button } from "../../components/common/Button";
 import { Modal } from "../../components/common/Modal";
 import { Preview } from "../../components/Preview/Preview";
 import { useToast } from "../../components/common/Toast";
+import { useErrorToast } from "../../hooks/useErrorToast";
+import { writeModeLabels } from "../../constants/labels";
 
 interface FlowData {
   id: string;
@@ -49,17 +51,12 @@ const statusLabels: Record<string, string> = {
   failed: "Ошибка",
 };
 
-const writeModeLabels: Record<string, string> = {
-  append: "Добавление",
-  upsert: "Обновление и вставка",
-  replace: "Перезапись",
-};
-
 export default function FlowDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { addToast } = useToast();
+  const { showErrorToast } = useErrorToast();
   const [previewSession, setPreviewSession] = useState<string | null>(null);
   const [selectedSchema, setSelectedSchema] = useState("");
   const [selectedSourceTable, setSelectedSourceTable] = useState("");
@@ -71,39 +68,54 @@ export default function FlowDetail() {
 
   const { data: flow, isLoading } = useQuery<FlowData>({
     queryKey: ["flow", id],
-    queryFn: () => api.get(`/flows/${id}`).then((r) => r.data),
+    queryFn: ({ signal }) => api.get(`/flows/${id}`, { signal }).then((r) => r.data),
     enabled: !!id,
   });
 
   const { data: tables = [] } = useQuery<FlowTableData[]>({
     queryKey: ["flow-tables", id],
-    queryFn: () => api.get(`/flows/${id}/tables`).then((r) => r.data),
+    queryFn: ({ signal }) =>
+      api.get(`/flows/${id}/tables`, { signal }).then((r) => extractItems<FlowTableData>(r.data)),
     enabled: !!id,
   });
 
   const { data: sourceSchemas = [] } = useQuery<string[]>({
     queryKey: ["flow-source-schemas", flow?.source_id],
-    queryFn: () => api.get(`/sources/${flow?.source_id}/schemas`).then((r) => r.data),
+    queryFn: ({ signal }) =>
+      api.get(`/sources/${flow?.source_id}/schemas`, { signal }).then((r) => {
+        const payload = r.data;
+        return Array.isArray(payload?.schemas) ? payload.schemas : [];
+      }),
     enabled: !!flow?.source_id,
   });
 
   const { data: sourceTables = [] } = useQuery<SourceTableData[]>({
     queryKey: ["flow-source-tables", flow?.source_id, selectedSchema],
-    queryFn: () => api.get(`/sources/${flow?.source_id}/schemas/${selectedSchema}/tables`).then((r) => r.data),
+    queryFn: ({ signal }) =>
+      api.get(`/sources/${flow?.source_id}/schemas/${selectedSchema}/tables`, { signal }).then((r) => {
+        const payload = r.data;
+        return Array.isArray(payload?.tables) ? payload.tables : [];
+      }),
     enabled: !!flow?.source_id && !!selectedSchema,
   });
 
   useEffect(() => {
-    if (sourceSchemas.length && !selectedSchema) {
-      setSelectedSchema(sourceSchemas[0]);
+    if (sourceSchemas.length === 0) {
+      setSelectedSchema("");
+      return;
     }
-  }, [sourceSchemas, selectedSchema]);
+    setSelectedSchema((current) => (current && sourceSchemas.includes(current) ? current : sourceSchemas[0]));
+  }, [sourceSchemas]);
 
   useEffect(() => {
-    if (sourceTables.length && !selectedSourceTable) {
-      setSelectedSourceTable(sourceTables[0].name);
+    if (!selectedSchema || sourceTables.length === 0) {
+      setSelectedSourceTable("");
+      return;
     }
-  }, [sourceTables, selectedSourceTable]);
+    setSelectedSourceTable((current) =>
+      current && sourceTables.some((table) => table.name === current) ? current : sourceTables[0].name
+    );
+  }, [selectedSchema, sourceTables]);
 
   const activateMutation = useMutation({
     mutationFn: () => api.post(`/flows/${id}/activate`),
@@ -113,7 +125,7 @@ export default function FlowDetail() {
       queryClient.invalidateQueries({ queryKey: ["flows"] });
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось активировать поток"));
+      showErrorToast(error, "Не удалось активировать поток");
     },
   });
 
@@ -125,7 +137,7 @@ export default function FlowDetail() {
       queryClient.invalidateQueries({ queryKey: ["flows"] });
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось поставить поток на паузу"));
+      showErrorToast(error, "Не удалось поставить поток на паузу");
     },
   });
 
@@ -139,7 +151,7 @@ export default function FlowDetail() {
       navigate(`/runs/${data.id}`);
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось запустить поток"));
+      showErrorToast(error, "Не удалось запустить поток");
     },
   });
 
@@ -156,7 +168,7 @@ export default function FlowDetail() {
       addToast("success", "Предпросмотр подготовлен");
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось запустить предпросмотр"));
+      showErrorToast(error, "Не удалось запустить предпросмотр");
     },
   });
 
@@ -171,7 +183,7 @@ export default function FlowDetail() {
       queryClient.invalidateQueries({ queryKey: ["flow-tables", id] });
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось добавить таблицу"));
+      showErrorToast(error, "Не удалось добавить таблицу");
     },
   });
 
@@ -187,7 +199,7 @@ export default function FlowDetail() {
       setDropSingleTargetTable(false);
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось удалить таблицу"));
+      showErrorToast(error, "Не удалось удалить таблицу");
     },
   });
 
@@ -204,7 +216,7 @@ export default function FlowDetail() {
       navigate("/flows");
     },
     onError: (error: unknown) => {
-      addToast("error", extractApiErrorMessage(error, "Не удалось удалить поток"));
+      showErrorToast(error, "Не удалось удалить поток");
     },
   });
 

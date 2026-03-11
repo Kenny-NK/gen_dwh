@@ -6,6 +6,7 @@ import React, { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import api from "../services/api";
 import { Input } from "./common/Input";
+import { formatDateTime } from "../utils/formatDate";
 
 interface ScheduleBuilderProps {
   value: string;
@@ -27,7 +28,7 @@ export function ScheduleBuilder({ value, onChange }: ScheduleBuilderProps) {
   const validateMutation = useMutation({
     mutationFn: (expr: string) =>
       api
-        .post("/flows/00000000-0000-0000-0000-000000000000/schedule/validate", {
+        .post("/schedules/validate", {
           cron_expression: expr,
         })
         .then((r) => r.data),
@@ -47,6 +48,8 @@ export function ScheduleBuilder({ value, onChange }: ScheduleBuilderProps) {
       const timer = setTimeout(() => validateMutation.mutate(value), 500);
       return () => clearTimeout(timer);
     }
+    setNextTimes([]);
+    setError(null);
   }, [value, validateMutation]);
 
   return (
@@ -78,7 +81,7 @@ export function ScheduleBuilder({ value, onChange }: ScheduleBuilderProps) {
         <div className="mt-2 text-xs text-gray-500 dark:text-slate-400">
           <div className="font-medium">Ближайшие запуски:</div>
           {nextTimes.map((t, i) => (
-            <div key={i}>{new Date(t).toLocaleString()}</div>
+            <div key={i}>{formatDateTime(t)}</div>
           ))}
         </div>
       )}
