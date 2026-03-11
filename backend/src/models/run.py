@@ -50,6 +50,7 @@ class Run(Base):
 
     # Meltano state
     meltano_state_file: Mapped[str | None] = mapped_column(String(500))
+    celery_task_id: Mapped[str | None] = mapped_column(String(255))
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=now_utc, server_default=func.now()

@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import csv
 import io
-import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -18,10 +17,11 @@ from openpyxl import load_workbook
 from sqlalchemy.engine import make_url
 
 from src.core.config import settings
+from src.core.db_utils import quote_ident
+from src.services.record_flattening import normalize_identifier
 
 _MAX_IDENTIFIER_LEN = 63
 _SUPPORTED_EXTENSIONS = (".csv", ".xlsx")
-_IDENTIFIER_RE = re.compile(r"[^a-zA-Z0-9_]+")
 
 
 @dataclass
@@ -34,24 +34,11 @@ class S3LoadResult:
     state_file: str | None = None
 
 
-def _quote_ident(identifier: str) -> str:
-    return '"' + identifier.replace('"', '""') + '"'
-
-
-def _normalize_identifier(raw_value: str | None, fallback: str) -> str:
-    value = _IDENTIFIER_RE.sub("_", (raw_value or "").strip().lower()).strip("_")
-    if not value:
-        value = fallback
-    if value[0].isdigit():
-        value = f"c_{value}"
-    return value[:_MAX_IDENTIFIER_LEN]
-
-
 def _normalize_headers(raw_headers: list[str]) -> list[str]:
     result: list[str] = []
     used: set[str] = set()
     for idx, header in enumerate(raw_headers):
-        base = _normalize_identifier(header, f"col_{idx + 1}")
+        base = normalize_identifier(header, f"col_{idx + 1}")
         candidate = base
         suffix = 1
         while candidate in used:
@@ -199,8 +186,8 @@ async def _ensure_table_shape(
     columns: list[str],
     upsert_column: str | None,
 ) -> None:
-    schema_sql = _quote_ident(schema_name)
-    table_sql = _quote_ident(table_name)
+    schema_sql = quote_ident(schema_name)
+    table_sql = quote_ident(table_name)
     await conn.execute(f"CREATE SCHEMA IF NOT EXISTS {schema_sql}")
 
     existing_rows = await conn.fetch(
@@ -216,7 +203,7 @@ async def _ensure_table_shape(
     existing_columns = {str(row["column_name"]) for row in existing_rows}
 
     if not existing_columns:
-        columns_sql = ", ".join(f"{_quote_ident(column)} TEXT" for column in columns)
+        columns_sql = ", ".join(f"{quote_ident(column)} TEXT" for column in columns)
         await conn.execute(f"CREATE TABLE IF NOT EXISTS {schema_sql}.{table_sql} ({columns_sql})")
         existing_columns = set(columns)
     else:
@@ -224,14 +211,14 @@ async def _ensure_table_shape(
             if column in existing_columns:
                 continue
             await conn.execute(
-                f"ALTER TABLE {schema_sql}.{table_sql} ADD COLUMN {_quote_ident(column)} TEXT"
+                f"ALTER TABLE {schema_sql}.{table_sql} ADD COLUMN {quote_ident(column)} TEXT"
             )
 
     if upsert_column:
-        index_name = _normalize_identifier(f"uq_{table_name}_{upsert_column}", "uq_upsert")
+        index_name = normalize_identifier(f"uq_{table_name}_{upsert_column}", "uq_upsert")
         await conn.execute(
-            f"CREATE UNIQUE INDEX IF NOT EXISTS {_quote_ident(index_name)} "
-            f"ON {schema_sql}.{table_sql} ({_quote_ident(upsert_column)})"
+            f"CREATE UNIQUE INDEX IF NOT EXISTS {quote_ident(index_name)} "
+            f"ON {schema_sql}.{table_sql} ({quote_ident(upsert_column)})"
         )
 
 
@@ -245,8 +232,8 @@ async def _insert_rows(
     upsert_column: str | None,
     on_chunk_inserted: Callable[[int], Awaitable[None]] | None = None,
 ) -> int:
-    schema_sql = _quote_ident(schema_name)
-    table_sql = _quote_ident(table_name)
+    schema_sql = quote_ident(schema_name)
+    table_sql = quote_ident(table_name)
 
     if write_mode == "replace":
         await conn.execute(f"TRUNCATE TABLE {schema_sql}.{table_sql}")
@@ -254,7 +241,7 @@ async def _insert_rows(
     if not rows:
         return 0
 
-    columns_sql = ", ".join(_quote_ident(column) for column in columns)
+    columns_sql = ", ".join(quote_ident(column) for column in columns)
     placeholders_sql = ", ".join(f"${index}" for index in range(1, len(columns) + 1))
     insert_prefix = (
         f"INSERT INTO {schema_sql}.{table_sql} ({columns_sql}) VALUES ({placeholders_sql})"
@@ -264,14 +251,14 @@ async def _insert_rows(
         update_columns = [column for column in columns if column != upsert_column]
         if update_columns:
             set_sql = ", ".join(
-                f"{_quote_ident(column)} = EXCLUDED.{_quote_ident(column)}"
+                f"{quote_ident(column)} = EXCLUDED.{quote_ident(column)}"
                 for column in update_columns
             )
             statement = (
-                f"{insert_prefix} ON CONFLICT ({_quote_ident(upsert_column)}) DO UPDATE SET {set_sql}"
+                f"{insert_prefix} ON CONFLICT ({quote_ident(upsert_column)}) DO UPDATE SET {set_sql}"
             )
         else:
-            statement = f"{insert_prefix} ON CONFLICT ({_quote_ident(upsert_column)}) DO NOTHING"
+            statement = f"{insert_prefix} ON CONFLICT ({quote_ident(upsert_column)}) DO NOTHING"
     else:
         statement = insert_prefix
 
@@ -324,9 +311,9 @@ async def run_s3_to_postgres(
     if write_mode not in {"append", "replace", "upsert"}:
         return S3LoadResult(success=False, error_message=f"Неподдерживаемый режим записи: {write_mode}")
 
-    target_schema = _normalize_identifier(str(target_config.get("schema") or "public"), "public")
+    target_schema = normalize_identifier(str(target_config.get("schema") or "public"), "public")
     upsert_key_raw = str(target_config.get("upsert_key") or "").strip()
-    upsert_key_norm = _normalize_identifier(upsert_key_raw, "id") if upsert_key_raw else None
+    upsert_key_norm = normalize_identifier(upsert_key_raw, "id") if upsert_key_raw else None
 
     conn: asyncpg.Connection | None = None
     try:
@@ -345,7 +332,7 @@ async def run_s3_to_postgres(
                 )
 
             default_target = source_key.split("/")[-1].rsplit(".", 1)[0]
-            target_table = _normalize_identifier(
+            target_table = normalize_identifier(
                 str(table_spec.get("table_name") or default_target),
                 "s3_table",
             )

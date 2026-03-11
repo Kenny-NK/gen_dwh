@@ -2,11 +2,13 @@
 
 from fastapi import APIRouter
 
-from src.api.v1 import auth, sources, flows, preview, runs, schedules, notifications, audit, dashboard
+from src.api.v1 import admin, auth, sources, flows, preview, runs, schedules, notifications, audit, dashboard, jira
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(auth.router)
+api_router.include_router(admin.router)
 api_router.include_router(sources.router)
+api_router.include_router(jira.router)
 api_router.include_router(flows.router)
 api_router.include_router(preview.router)
 api_router.include_router(runs.router)

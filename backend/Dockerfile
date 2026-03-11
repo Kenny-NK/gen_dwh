@@ -10,6 +10,10 @@ COPY pyproject.toml .
 COPY src ./src
 RUN pip install --no-cache-dir .
 
+# Health checks and some admin diagnostics expect Meltano CLI to be present
+# in the backend image, not only in the worker image.
+RUN pip install --no-cache-dir meltano
+
 COPY . .
 
 EXPOSE 8000

@@ -9,26 +9,31 @@ from __future__ import annotations
 
 import asyncio
 import subprocess
-from typing import Iterable
-
 from sqlalchemy import select, text
 
 from src.core.config import settings
 from src.core.tenant import validate_schema_name
-from src.models.base import Base, SystemSessionLocal, system_engine
+from src.models.base import SystemSessionLocal, system_engine
 from src.models.tenant import Tenant
+from src.services.tenant_schema import (
+    ensure_tenant_schema_compatibility,
+    ensure_tenant_schema_tables,
+)
 
 # Import models so metadata includes all tenant-scoped tables.
 import src.models.audit  # noqa: F401
+import src.models.cleanup_job  # noqa: F401
 import src.models.flow  # noqa: F401
 import src.models.flow_table  # noqa: F401
 import src.models.notification  # noqa: F401
+import src.models.notification_read  # noqa: F401
 import src.models.preview_session  # noqa: F401
 import src.models.run  # noqa: F401
 import src.models.schedule  # noqa: F401
 import src.models.source  # noqa: F401
 import src.models.source_credential  # noqa: F401
 import src.models.user  # noqa: F401
+import src.models.workspace_membership  # noqa: F401
 
 
 async def _table_exists(schema: str, table: str) -> bool:
@@ -107,23 +112,12 @@ async def _get_active_tenant_schemas() -> list[str]:
         return [validate_schema_name(schema) for schema in result.scalars().all()]
 
 
-def _tenant_tables() -> Iterable:
-    # Tenant-scoped tables are defined without explicit schema.
-    return [table for table in Base.metadata.tables.values() if table.schema is None]
-
-
 async def _ensure_tenant_schema_tables() -> None:
-    tenant_tables = list(_tenant_tables())
     schemas = await _get_active_tenant_schemas()
 
     for schema_name in schemas:
         async with system_engine.begin() as conn:
-            await conn.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema_name}"'))
-            # Force table creation checks in tenant schema, not in public.
-            await conn.execute(text(f'SET LOCAL search_path TO "{schema_name}"'))
-            await conn.run_sync(
-                lambda sync_conn: Base.metadata.create_all(sync_conn, tables=tenant_tables)
-            )
+            await ensure_tenant_schema_tables(conn, schema_name)
         print(f"Ensured tenant schema and tables: {schema_name}")
 
 
@@ -132,62 +126,7 @@ async def _ensure_tenant_schema_compatibility() -> None:
     schemas = await _get_active_tenant_schemas()
     for schema_name in schemas:
         async with system_engine.begin() as conn:
-            await conn.execute(
-                text(
-                    f"""
-                    ALTER TABLE "{schema_name}".sources
-                    ADD COLUMN IF NOT EXISTS source_type VARCHAR(20) NOT NULL DEFAULT 'postgres'
-                    """
-                )
-            )
-            await conn.execute(
-                text(
-                    f"""
-                    CREATE INDEX IF NOT EXISTS idx_sources_type
-                    ON "{schema_name}".sources (source_type)
-                    """
-                )
-            )
-            await conn.execute(
-                text(
-                    f"""
-                    ALTER TABLE "{schema_name}".flow_tables
-                    ALTER COLUMN source_schema TYPE VARCHAR(255)
-                    """
-                )
-            )
-            await conn.execute(
-                text(
-                    f"""
-                    ALTER TABLE "{schema_name}".flow_tables
-                    ALTER COLUMN source_table TYPE VARCHAR(255)
-                    """
-                )
-            )
-            await conn.execute(
-                text(
-                    f"""
-                    ALTER TABLE "{schema_name}".flow_tables
-                    ALTER COLUMN target_table TYPE VARCHAR(255)
-                    """
-                )
-            )
-            await conn.execute(
-                text(
-                    f"""
-                    ALTER TABLE "{schema_name}".runs
-                    ADD COLUMN IF NOT EXISTS source_records_total BIGINT
-                    """
-                )
-            )
-            await conn.execute(
-                text(
-                    f"""
-                    ALTER TABLE "{schema_name}".runs
-                    ADD COLUMN IF NOT EXISTS source_records_total_is_estimate BOOLEAN NOT NULL DEFAULT true
-                    """
-                )
-            )
+            await ensure_tenant_schema_compatibility(conn, schema_name)
         print(f"Ensured tenant schema compatibility upgrades: {schema_name}")
 
 

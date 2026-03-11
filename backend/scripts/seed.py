@@ -10,6 +10,7 @@ from src.core.tenant import validate_schema_name
 from src.models.base import SystemSessionLocal, system_engine, Base
 from src.models.tenant import Tenant
 from src.models.user import User
+from src.models.workspace_membership import WorkspaceMembership
 
 
 async def seed():
@@ -35,16 +36,22 @@ async def seed():
 
         # Create test user
         user = User(
-            tenant_id=tenant.id,
             keycloak_id="test-user-001",
             email="admin@acme.com",
-            role="admin",
         )
         session.add(user)
+        await session.flush()
+
+        membership = WorkspaceMembership(
+            user_id=user.id,
+            tenant_id=tenant.id,
+            role="owner",
+        )
+        session.add(membership)
 
         await session.commit()
         print(f"Created tenant: {tenant.name} (schema: {tenant.schema_name})")
-        print(f"Created user: {user.email} (role: {user.role})")
+        print(f"Created user: {user.email} (workspace role: owner)")
 
 
 if __name__ == "__main__":

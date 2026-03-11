@@ -31,6 +31,19 @@ plugins:
         bucket: ${TAP_S3_CSV_BUCKET}
         tables: ${TAP_S3_CSV_TABLES}
         warning_if_no_file: true
+    - name: tap-jira
+      variant: meltanolabs
+      pip_url: https://github.com/MeltanoLabs/tap-jira/archive/refs/tags/v0.2.3.tar.gz
+      config:
+        domain: ${TAP_JIRA_DOMAIN}
+        email: ${TAP_JIRA_EMAIL}
+        api_token: ${TAP_JIRA_API_TOKEN}
+        start_date: ${TAP_JIRA_START_DATE}
+        page_size:
+          issues: ${TAP_JIRA_PAGE_SIZE_ISSUES}
+        stream_options:
+          issues:
+            jql: ${TAP_JIRA_STREAM_OPTIONS_ISSUES_JQL}
 
   loaders:
     - name: target-postgres

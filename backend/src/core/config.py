@@ -2,7 +2,7 @@
 
 from urllib.parse import urlparse
 
-from pydantic import Field, model_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -15,18 +15,25 @@ class Settings(BaseSettings):
     rate_limit_window_seconds: int = Field(default=60, ge=1, le=3_600)
     jwks_cache_ttl_seconds: int = Field(default=3600, ge=60, le=86_400)
     http_client_timeout_seconds: float = Field(default=5.0, gt=0.1, le=60.0)
+    external_ca_bundle_path: str = ""
     external_service_failure_threshold: int = Field(default=5, ge=1, le=20)
     external_service_cooldown_seconds: int = Field(default=60, ge=5, le=3_600)
     meltano_command_timeout_seconds: int = Field(default=3600, ge=60, le=86_400)
     stale_pending_run_minutes: int = Field(default=15, ge=1, le=1_440)
+    orphan_pending_run_grace_seconds: int = Field(default=90, ge=5, le=3_600)
+    jira_connector_enabled: bool = True
     trust_proxy_headers: bool = False
-    allow_realm_tenant_fallback: bool = True
+    allow_realm_tenant_fallback: bool = False
     cors_allowed_origins: str = "http://localhost:5173"
     enforce_secure_secrets: bool = True
     auth_cookie_name: str = "gendwh_access_token"
     auth_cookie_max_age_seconds: int = Field(default=3600, ge=300, le=86_400)
     auth_cookie_secure: bool = False
     auth_cookie_samesite: str = "lax"
+    preview_default_mode: str = "auto"
+    preview_allow_mode_override: bool = True
+    preview_live_ttl_minutes: int = Field(default=30, ge=1, le=1_440)
+    preview_snapshot_ttl_minutes: int = Field(default=120, ge=1, le=4_320)
 
     # Database
     database_system_url: str = "postgresql+asyncpg://gendwh:gendwh_local_dev_pw@localhost:5432/gendwh_system"
@@ -50,6 +57,17 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/0"
     celery_result_backend: str = "redis://localhost:6379/1"
 
+    @field_validator("debug", mode="before")
+    @classmethod
+    def normalize_debug_value(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"release", "prod", "production"}:
+                return False
+            if normalized in {"debug", "dev", "development"}:
+                return True
+        return value
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_allowed_origins.split(",") if origin.strip()]
@@ -67,6 +85,8 @@ class Settings(BaseSettings):
                 "change-me-32-byte-hex-key",
                 "change_me_32_byte_hex_key_here_00",
                 "change_me_app_secret",
+                "dev-only-change-in-env-please",
+                "dev-only-db-encryption-key-change-me",
             }
             if self.app_secret_key in weak_values:
                 raise ValueError("APP_SECRET_KEY must be changed from default value")
@@ -82,6 +102,9 @@ class Settings(BaseSettings):
 
         if self.auth_cookie_samesite.lower() not in {"lax", "strict", "none"}:
             raise ValueError("AUTH_COOKIE_SAMESITE must be one of: lax, strict, none")
+
+        if self.preview_default_mode.lower() not in {"auto", "live", "snapshot"}:
+            raise ValueError("PREVIEW_DEFAULT_MODE must be one of: auto, live, snapshot")
 
         return self
 

@@ -32,5 +32,9 @@ celery_app.conf.update(
             "task": "src.tasks.cleanup.cleanup_expired_previews",
             "schedule": 300.0,
         },
+        "process-cleanup-jobs": {
+            "task": "src.tasks.cleanup.process_cleanup_jobs",
+            "schedule": 60.0,
+        },
     },
 )

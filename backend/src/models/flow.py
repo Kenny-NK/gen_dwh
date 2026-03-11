@@ -3,8 +3,8 @@
 from datetime import datetime
 from uuid import UUID as PyUUID, uuid4
 
-from sqlalchemy import DateTime, ForeignKey, Index, String, Text
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, TimestampMixin
@@ -23,8 +23,8 @@ class Flow(Base, TimestampMixin):
     description: Mapped[str | None] = mapped_column(Text)
 
     # Source reference
-    source_id: Mapped[PyUUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False
+    source_id: Mapped[PyUUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sources.id", ondelete="SET NULL"), nullable=True
     )
 
     # Target configuration
@@ -34,10 +34,29 @@ class Flow(Base, TimestampMixin):
     # Flow state
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
     status_reason: Mapped[str | None] = mapped_column(Text)
+    source_deleted: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
+    pause_requested: Mapped[bool] = mapped_column(
+        Boolean,
+        nullable=False,
+        default=False,
+        server_default="false",
+    )
 
     # Write configuration
     write_mode: Mapped[str] = mapped_column(String(20), nullable=False, default="append")
     upsert_key: Mapped[str | None] = mapped_column(String(255))
+    extraction_config: Mapped[dict | None] = mapped_column(JSONB)
+    preview_mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="auto",
+        server_default="auto",
+    )
 
     # Metadata
     created_by: Mapped[PyUUID | None] = mapped_column(
@@ -46,7 +65,7 @@ class Flow(Base, TimestampMixin):
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Relationships
-    source: Mapped["Source"] = relationship(back_populates="flows")
+    source: Mapped["Source | None"] = relationship(back_populates="flows")
     tables: Mapped[list["FlowTable"]] = relationship(
         back_populates="flow", cascade="all, delete-orphan"
     )

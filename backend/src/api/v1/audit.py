@@ -29,18 +29,45 @@ class AuditEventResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class AuditListResponse(BaseModel):
+    items: list[AuditEventResponse]
+    total: int
+
+
 @router.get("")
 async def list_audit_events(
     entity_type: str | None = None,
     entity_id: UUID | None = None,
+    user_email: str | None = None,
+    action: str | None = None,
+    date_from: datetime | None = None,
+    date_to: datetime | None = None,
     limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_tenant_db),
     _: None = Depends(require_permission(Permission.AUDIT_READ)),
     current_user: dict = Depends(get_current_user),
-) -> list[AuditEventResponse]:
+) -> AuditListResponse:
     service = AuditService(db)
     events = await service.list_events(
-        entity_type=entity_type, entity_id=entity_id, limit=limit, offset=offset
+        entity_type=entity_type,
+        entity_id=entity_id,
+        user_email=user_email,
+        action=action,
+        date_from=date_from,
+        date_to=date_to,
+        limit=limit,
+        offset=offset,
     )
-    return [AuditEventResponse.model_validate(e) for e in events]
+    total = await service.count_events(
+        entity_type=entity_type,
+        entity_id=entity_id,
+        user_email=user_email,
+        action=action,
+        date_from=date_from,
+        date_to=date_to,
+    )
+    return AuditListResponse(
+        items=[AuditEventResponse.model_validate(e) for e in events],
+        total=total,
+    )

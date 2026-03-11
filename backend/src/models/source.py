@@ -4,7 +4,7 @@ from datetime import datetime
 from uuid import UUID as PyUUID, uuid4
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text, func
-from sqlalchemy.dialects.postgresql import UUID
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from src.models.base import Base, TimestampMixin
@@ -35,6 +35,7 @@ class Source(Base, TimestampMixin):
     )
     last_validated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     validation_error: Mapped[str | None] = mapped_column(Text)
+    extraction_config: Mapped[dict | None] = mapped_column(JSONB)
 
     # Metadata
     created_by: Mapped[PyUUID | None] = mapped_column(

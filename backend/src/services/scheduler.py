@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import logging
 import re
+import threading
 import time
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
@@ -31,7 +32,9 @@ from src.services.connection import (
     decrypt_password,
     estimate_tables_row_count,
 )
+from src.services.jira_loader import run_jira_pat_to_postgres
 from src.services.meltano import run_meltano_elt
+from src.services.record_flattening import normalize_identifier
 from src.services.run_service import RunService
 from src.services.s3_loader import run_s3_to_postgres
 
@@ -39,8 +42,10 @@ from src.services.s3_loader import run_s3_to_postgres
 import src.models.source  # noqa: F401
 import src.models.source_credential  # noqa: F401
 import src.models.user  # noqa: F401
+import src.models.workspace_membership  # noqa: F401
 
 _worker_loop: asyncio.AbstractEventLoop | None = None
+_worker_loop_lock = threading.Lock()
 logger = logging.getLogger(__name__)
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,62}$")
 
@@ -53,20 +58,20 @@ def _advisory_lock_id(identifier: str) -> int:
 def _run_in_worker_loop(coro):
     global _worker_loop
     if _worker_loop is None or _worker_loop.is_closed():
-        _worker_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(_worker_loop)
+        with _worker_loop_lock:
+            if _worker_loop is None or _worker_loop.is_closed():
+                _worker_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(_worker_loop)
     return _worker_loop.run_until_complete(coro)
 
 
 def _normalize_table_identifier(raw_value: str | None, fallback: str = "table") -> str:
-    sanitized = re.sub(r"[^a-zA-Z0-9_]+", "_", (raw_value or "").strip()).strip("_").lower()
-    if not sanitized:
-        sanitized = fallback
-    if not sanitized:
-        return fallback
-    if sanitized[0].isdigit():
-        sanitized = f"t_{sanitized}"
-    return sanitized[:63]
+    normalized = normalize_identifier(
+        raw_value,
+        fallback,
+        digit_prefix="t_",
+    )
+    return normalized or fallback
 
 
 def _default_target_table_name(source_table: str) -> str:
@@ -226,10 +231,9 @@ async def _dispatch_due_schedules_async() -> dict:
                     await _commit_with_tenant(session, tenant_schema)
                     continue
 
-                if await run_service.has_active_run(
-                    flow.id,
-                    finalize_stale=False,
-                ):
+                has_active_run = await run_service.has_active_run(flow.id)
+                await set_tenant_schema(session, tenant_schema)
+                if has_active_run:
                     continue
 
                 try:
@@ -467,6 +471,24 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
                     "aws_secret_access_key": password,
                     "aws_endpoint_url": build_s3_endpoint_url(source.host, source.port),
                 }
+            elif source_type == "jira":
+                flow_extraction_config = flow.extraction_config if isinstance(flow.extraction_config, dict) else {}
+                source_extraction_config = (
+                    source.extraction_config if isinstance(source.extraction_config, dict) else {}
+                )
+                merged_extraction_config = {
+                    **source_extraction_config,
+                    **flow_extraction_config,
+                }
+                source_config = {
+                    "source_type": "jira",
+                    "host": source.host,
+                    "port": source.port or 443,
+                    "database": source.database,
+                    "username": source.username,
+                    "password": password,
+                    "extraction_config": merged_extraction_config,
+                }
             else:
                 source_config = {
                     "source_type": "postgres",
@@ -490,6 +512,18 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
                         {
                             "source_key": flow_table.source_table,
                             "table_name": flow_table.target_table,
+                        }
+                    )
+                    continue
+                if source_type == "jira":
+                    tables.append(
+                        {
+                            "stream": flow_table.source_table,
+                            "table": flow_table.source_table,
+                            "table_name": flow_table.target_table,
+                            "replication_method": flow_table.replication_method,
+                            "replication_key": flow_table.replication_key,
+                            "last_cursor_value": flow_table.last_cursor_value,
                         }
                     )
                     continue
@@ -616,6 +650,17 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
                         tables=tables,
                         progress_callback=_on_progress,
                     )
+                elif (
+                    source_type == "jira"
+                    and str(source_config.get("extraction_config", {}).get("auth_type") or "").lower()
+                    == "pat_bearer"
+                ):
+                    result = await run_jira_pat_to_postgres(
+                        source_config=source_config,
+                        target_config=target_config,
+                        tables=tables,
+                        progress_callback=_on_progress,
+                    )
                 else:
                     # Execute Meltano run for PostgreSQL source flows
                     result = await run_meltano_elt(
@@ -663,6 +708,12 @@ async def _execute_flow_run_async(task, run_id: str, flow_id: str, tenant_schema
                     run.source_records_total = int(result_source_total)
                     run.source_records_total_is_estimate = False
                 run.meltano_state_file = result.state_file
+                last_cursor_values = getattr(result, "last_cursor_values", {}) or {}
+                if isinstance(last_cursor_values, dict):
+                    for flow_table in getattr(flow, "tables", []):
+                        cursor_value = last_cursor_values.get(str(flow_table.source_table or "").strip().lower())
+                        if cursor_value:
+                            flow_table.last_cursor_value = str(cursor_value)
                 if flow.pause_requested:
                     flow.status = "paused"
                     flow.status_reason = "Пауза применена после завершения текущего запуска."

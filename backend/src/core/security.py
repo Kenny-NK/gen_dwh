@@ -1,12 +1,14 @@
-"""Security utilities - JWT validation, password hashing (T016)."""
+"""Security utilities for Keycloak and app session tokens."""
 
 import asyncio
 import time
+from datetime import UTC, datetime, timedelta
 
 import httpx
 from jose import JWTError, jwt
 
 from src.core.config import settings
+from src.core.http import get_http_client_ssl_context
 
 
 _jwks_cache: dict | None = None
@@ -18,6 +20,10 @@ _keycloak_circuit_open_until = 0.0
 
 class KeycloakUnavailableError(RuntimeError):
     """Raised when Keycloak JWKS cannot be fetched."""
+
+
+class AppSessionError(RuntimeError):
+    """Raised when the signed app session token is invalid."""
 
 
 async def fetch_jwks() -> dict:
@@ -34,10 +40,16 @@ async def fetch_jwks() -> dict:
         if _jwks_cache is not None and now < _jwks_expires_at:
             return _jwks_cache
 
-        url = f"{settings.keycloak_url}/realms/{settings.keycloak_realm}/protocol/openid-connect/certs"
+        url = (
+            f"{settings.keycloak_url}/realms/"
+            f"{settings.keycloak_realm}/protocol/openid-connect/certs"
+        )
         try:
             timeout = httpx.Timeout(settings.http_client_timeout_seconds)
-            async with httpx.AsyncClient(timeout=timeout) as client:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                verify=get_http_client_ssl_context(),
+            ) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
                 _jwks_cache = resp.json()
@@ -92,3 +104,35 @@ async def decode_jwt(token: str) -> dict:
         return payload
     except JWTError:
         raise
+
+
+def create_app_session_token(
+    *,
+    subject: str,
+    user_id: str,
+    email: str,
+    active_workspace_id: str | None,
+    is_system_admin: bool,
+) -> str:
+    expires_at = datetime.now(UTC) + timedelta(seconds=settings.auth_cookie_max_age_seconds)
+    payload = {
+        "typ": "app_session",
+        "sub": subject,
+        "uid": user_id,
+        "email": email,
+        "active_workspace_id": active_workspace_id,
+        "is_system_admin": is_system_admin,
+        "iat": int(time.time()),
+        "exp": int(expires_at.timestamp()),
+    }
+    return jwt.encode(payload, settings.app_secret_key, algorithm="HS256")
+
+
+def decode_app_session_token(token: str) -> dict:
+    try:
+        payload = jwt.decode(token, settings.app_secret_key, algorithms=["HS256"])
+    except JWTError as exc:
+        raise AppSessionError("Invalid app session token") from exc
+    if payload.get("typ") != "app_session":
+        raise AppSessionError("Invalid app session token type")
+    return payload

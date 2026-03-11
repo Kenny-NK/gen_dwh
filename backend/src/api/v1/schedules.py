@@ -52,6 +52,13 @@ class ScheduleListResponse(BaseModel):
     items: list[ScheduleResponse]
 
 
+def _validate_cron_response(cron_expression: str) -> dict:
+    result = ScheduleService.validate_cron(cron_expression)
+    if result.get("valid"):
+        return {"valid": True, "next_times": result.get("next_times", [])}
+    return {"valid": False, "error": result.get("error")}
+
+
 @router.get("/flows/{flow_id}/schedule")
 async def get_schedule(
     flow_id: UUID,
@@ -161,10 +168,16 @@ async def validate_cron(
     _: None = Depends(require_permission(Permission.SCHEDULES_READ)),
     current_user: dict = Depends(get_current_user),
 ) -> dict:
-    result = ScheduleService.validate_cron(body.cron_expression)
-    if result.get("valid"):
-        return {"valid": True, "next_runs": result.get("next_times", [])}
-    return {"valid": False, "error": result.get("error")}
+    return _validate_cron_response(body.cron_expression)
+
+
+@router.post("/schedules/validate")
+async def validate_cron_standalone(
+    body: CronValidationRequest,
+    _: None = Depends(require_permission(Permission.SCHEDULES_READ)),
+    current_user: dict = Depends(get_current_user),
+) -> dict:
+    return _validate_cron_response(body.cron_expression)
 
 
 @router.get("/schedules")

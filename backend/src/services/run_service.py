@@ -43,6 +43,19 @@ class RunService:
         result = await self.session.execute(query)
         return list(result.scalars().all())
 
+    async def count_runs(
+        self,
+        flow_id: UUID | None = None,
+        status: str | None = None,
+    ) -> int:
+        query = select(func.count(Run.id))
+        if flow_id:
+            query = query.where(Run.flow_id == flow_id)
+        if status:
+            query = query.where(Run.status == status)
+        result = await self.session.execute(query)
+        return int(result.scalar() or 0)
+
     async def get_run(self, run_id: UUID) -> Run | None:
         result = await self.session.execute(select(Run).where(Run.id == run_id))
         return result.scalar_one_or_none()
@@ -146,6 +159,7 @@ class RunService:
         auto_commit: bool = True,
     ) -> bool:
         if finalize_stale:
+            await self.mark_orphaned_pending_runs(flow_id, auto_commit=auto_commit)
             await self.mark_stale_pending_runs(flow_id, auto_commit=auto_commit)
             await self.mark_stale_running_runs(flow_id, auto_commit=auto_commit)
         result = await self.session.execute(
@@ -155,6 +169,38 @@ class RunService:
             )
         )
         return result.scalar_one_or_none() is not None
+
+    async def mark_orphaned_pending_runs(self, flow_id: UUID, auto_commit: bool = True) -> int:
+        stale_before = datetime.now(UTC) - timedelta(seconds=settings.orphan_pending_run_grace_seconds)
+        result = await self.session.execute(
+            select(Run).where(
+                Run.flow_id == flow_id,
+                Run.status == "pending",
+                Run.celery_task_id.is_(None),
+                Run.created_at < stale_before,
+            )
+        )
+        stale_runs = list(result.scalars().all())
+        if not stale_runs:
+            return 0
+
+        now = datetime.now(UTC)
+        for run in stale_runs:
+            run.status = "failed"
+            run.error_message = (
+                "Запуск помечен как неуспешный: задача не была отправлена в очередь выполнения."
+            )
+            run.completed_at = now
+        flow = await self.session.get(Flow, flow_id)
+        if flow and flow.status == "running":
+            flow.status = "failed"
+            flow.status_reason = (
+                "Поток помечен как неуспешный: запуск не был отправлен в очередь выполнения."
+            )
+            flow.pause_requested = False
+        if auto_commit:
+            await self.session.commit()
+        return len(stale_runs)
 
     async def mark_stale_pending_runs(self, flow_id: UUID, auto_commit: bool = True) -> int:
         stale_before = datetime.now(UTC) - timedelta(minutes=settings.stale_pending_run_minutes)

@@ -22,6 +22,14 @@ class PreviewSession(Base):
     row_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
     total_rows: Mapped[int | None] = mapped_column(Integer)
     tables_available: Mapped[list | None] = mapped_column(JSONB)
+    requested_mode: Mapped[str | None] = mapped_column(String(20))
+    resolved_mode: Mapped[str] = mapped_column(
+        String(20),
+        nullable=False,
+        default="live",
+        server_default="live",
+    )
+    snapshot_payload: Mapped[dict | None] = mapped_column(JSONB)
 
     error_message: Mapped[str | None] = mapped_column(Text)
 

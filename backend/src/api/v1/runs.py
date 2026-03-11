@@ -5,6 +5,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
+from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.audit_utils import log_audit_event
@@ -12,6 +13,7 @@ from src.api.deps import get_current_actor_id, get_tenant_db, require_permission
 from src.core.permissions import Permission
 from src.core.tenant import get_current_tenant_schema
 from src.middleware.auth import get_current_user
+from src.models.run import Run
 from src.services.flow_service import FlowService
 from src.services.run_service import RunService
 from src.services.scheduler import execute_flow_run
@@ -46,6 +48,31 @@ class RunListResponse(BaseModel):
     offset: int
 
 
+async def _set_run_dispatch_state(
+    db: AsyncSession,
+    run_id: UUID,
+    *,
+    celery_task_id: str | None = None,
+    status_value: str | None = None,
+    error_message: str | None = None,
+    completed_at: datetime | None = None,
+) -> None:
+    values: dict[str, object | None] = {}
+    if celery_task_id is not None:
+        values["celery_task_id"] = celery_task_id
+    if status_value is not None:
+        values["status"] = status_value
+    if error_message is not None:
+        values["error_message"] = error_message
+    if completed_at is not None:
+        values["completed_at"] = completed_at
+    if not values:
+        return
+
+    await db.execute(update(Run).where(Run.id == run_id).values(**values))
+    await db.commit()
+
+
 @router.get("/flows/{flow_id}/runs")
 async def list_flow_runs(
     flow_id: UUID,
@@ -61,9 +88,10 @@ async def list_flow_runs(
         raise HTTPException(status_code=404, detail="Поток не найден")
     service = RunService(db)
     runs = await service.list_runs(flow_id=flow_id, status=status_filter, limit=limit, offset=offset)
+    total = await service.count_runs(flow_id=flow_id, status=status_filter)
     return RunListResponse(
         items=[RunResponse.model_validate(r) for r in runs],
-        total=len(runs),
+        total=total,
         limit=limit,
         offset=offset,
     )
@@ -93,11 +121,10 @@ async def trigger_run(
         raise HTTPException(status_code=400, detail="В потоке нет таблиц для запуска")
     if not flow.source or flow.source.connection_status == "invalid":
         raise HTTPException(status_code=400, detail="Источник недоступен. Проверьте подключение")
-
     service = RunService(db)
 
     # Check for active runs
-    if await service.has_active_run(flow_id, finalize_stale=False):
+    if await service.has_active_run(flow_id):
         raise HTTPException(status_code=409, detail="Запуск этого потока уже выполняется")
 
     try:
@@ -128,17 +155,20 @@ async def trigger_run(
         raise HTTPException(status_code=500, detail="Не определена схема арендатора")
     try:
         task_result = execute_flow_run.delay(str(run.id), str(flow_id), tenant_schema)
-        run.celery_task_id = task_result.id
-        await db.commit()
+        await _set_run_dispatch_state(db, run.id, celery_task_id=task_result.id)
     except Exception:
-        run.status = "failed"
-        run.error_message = "Не удалось отправить запуск в очередь выполнения"
-        run.completed_at = datetime.now(UTC)
-        await db.commit()
+        await _set_run_dispatch_state(
+            db,
+            run.id,
+            status_value="failed",
+            error_message="Не удалось отправить запуск в очередь выполнения",
+            completed_at=datetime.now(UTC),
+        )
         raise HTTPException(
             status_code=503,
             detail="Не удалось отправить запуск в очередь. Проверьте Redis/Celery.",
         )
+    run = await service.get_run_for_flow(run.id, flow_id) or run
     return RunResponse.model_validate(run)
 
 
@@ -217,12 +247,11 @@ async def retry_run(
         raise HTTPException(status_code=400, detail="В потоке нет таблиц для запуска")
     if not flow.source or flow.source.connection_status == "invalid":
         raise HTTPException(status_code=400, detail="Источник недоступен. Проверьте подключение")
-
     service = RunService(db)
     old_run = await service.get_run_for_flow(run_id, flow_id)
     if not old_run or old_run.status != "failed":
         raise HTTPException(status_code=400, detail="Повтор возможен только для завершившихся с ошибкой запусков")
-    if await service.has_active_run(flow_id, finalize_stale=False):
+    if await service.has_active_run(flow_id):
         raise HTTPException(status_code=409, detail="Запуск этого потока уже выполняется")
 
     try:
@@ -254,17 +283,20 @@ async def retry_run(
         raise HTTPException(status_code=500, detail="Не определена схема арендатора")
     try:
         task_result = execute_flow_run.delay(str(run.id), str(flow_id), tenant_schema)
-        run.celery_task_id = task_result.id
-        await db.commit()
+        await _set_run_dispatch_state(db, run.id, celery_task_id=task_result.id)
     except Exception:
-        run.status = "failed"
-        run.error_message = "Не удалось отправить повторный запуск в очередь выполнения"
-        run.completed_at = datetime.now(UTC)
-        await db.commit()
+        await _set_run_dispatch_state(
+            db,
+            run.id,
+            status_value="failed",
+            error_message="Не удалось отправить повторный запуск в очередь выполнения",
+            completed_at=datetime.now(UTC),
+        )
         raise HTTPException(
             status_code=503,
             detail="Не удалось отправить повторный запуск в очередь. Проверьте Redis/Celery.",
         )
+    run = await service.get_run_for_flow(run.id, flow_id) or run
     return RunResponse.model_validate(run)
 
 
@@ -293,9 +325,10 @@ async def list_all_runs(
 ) -> RunListResponse:
     service = RunService(db)
     runs = await service.list_runs(status=status_filter, limit=limit, offset=offset)
+    total = await service.count_runs(status=status_filter)
     return RunListResponse(
         items=[RunResponse.model_validate(r) for r in runs],
-        total=len(runs),
+        total=total,
         limit=limit,
         offset=offset,
     )

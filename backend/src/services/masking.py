@@ -19,33 +19,7 @@ MASK_RULES: dict[str, callable] = {
 }
 
 
-def detect_pii_type(column_name: str, sample_values: list[str]) -> str | None:
-    """Detect PII type from column name and sample values."""
-    name_lower = column_name.lower()
-
-    # Name-based heuristics
-    if "email" in name_lower:
-        return "pii_email"
-    if "phone" in name_lower or "tel" in name_lower:
-        return "pii_phone"
-    if "passport" in name_lower:
-        return "pii_passport"
-    if "card" in name_lower and "number" in name_lower:
-        return "pii_credit_card"
-
-    # Pattern-based detection from sample values
-    for value in sample_values[:5]:
-        if not value:
-            continue
-        str_val = str(value)
-        for pii_type, pattern in PII_PATTERNS.items():
-            if pattern.fullmatch(str_val):
-                return pii_type
-
-    return None
-
-
-def mask_value(value: Any, sensitivity_type: str) -> str:
+def mask_value(value: Any, sensitivity_type: str) -> str | None:
     """Mask a value based on its sensitivity type."""
     if value is None:
         return None

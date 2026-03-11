@@ -13,6 +13,7 @@ from src.models.base import Base
 # Import all models so Alembic can detect them
 from src.models.tenant import Tenant  # noqa: F401
 from src.models.user import User  # noqa: F401
+from src.models.workspace_membership import WorkspaceMembership  # noqa: F401
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.database_system_url)

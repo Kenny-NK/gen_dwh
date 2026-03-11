@@ -20,6 +20,7 @@ router = APIRouter(prefix="/flows/{flow_id}/preview", tags=["preview"])
 class PreviewRequest(BaseModel):
     row_limit: int = Field(100, ge=1, le=10000)
     tables: list[str] | None = None
+    preview_mode: str | None = Field(default=None, pattern="^(auto|live|snapshot)$")
 
 
 class PreviewSessionResponse(BaseModel):
@@ -29,6 +30,8 @@ class PreviewSessionResponse(BaseModel):
     row_limit: int
     total_rows: int | None
     tables_available: list[str] | None
+    requested_mode: str | None
+    resolved_mode: str
     error_message: str | None
     created_at: datetime
     completed_at: datetime | None
@@ -65,11 +68,15 @@ async def start_preview(
         raise HTTPException(status_code=400, detail=f"Неизвестные таблицы: {', '.join(unknown)}")
 
     service = PreviewService(db)
-    session = await service.create_session(
-        flow_id=flow_id,
-        row_limit=body.row_limit,
-        tables_available=selected_tables,
-    )
+    try:
+        session = await service.create_session(
+            flow_id=flow_id,
+            row_limit=body.row_limit,
+            tables_available=selected_tables,
+            requested_mode=body.preview_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     return PreviewSessionResponse.model_validate(session)
 
 

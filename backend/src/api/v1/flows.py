@@ -1,5 +1,6 @@
 """Flows API endpoints (T059, T060)."""
 
+import logging
 from datetime import datetime
 from uuid import UUID
 
@@ -10,10 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from src.api.audit_utils import log_audit_event
 from src.api.deps import get_current_actor_id, get_tenant_db, require_permission
 from src.core.permissions import Permission
+from src.core.tenant import get_current_tenant_schema
 from src.middleware.auth import get_current_user
+from src.schemas.jira import JiraExtractionConfig
 from src.services.flow_service import FlowService
+from src.tasks.cleanup import process_cleanup_jobs
 
 router = APIRouter(prefix="/flows", tags=["flows"])
+logger = logging.getLogger(__name__)
 
 
 # --- Schemas ---
@@ -26,6 +31,8 @@ class FlowCreate(BaseModel):
     target_table_prefix: str | None = None
     write_mode: str = "append"
     upsert_key: str | None = None
+    extraction_config: JiraExtractionConfig | None = None
+    preview_mode: str = Field(default="auto", pattern="^(auto|live|snapshot)$")
 
 
 class FlowUpdate(BaseModel):
@@ -35,6 +42,7 @@ class FlowUpdate(BaseModel):
     target_table_prefix: str | None = None
     write_mode: str | None = None
     upsert_key: str | None = None
+    preview_mode: str | None = Field(default=None, pattern="^(auto|live|snapshot)$")
 
 
 class FlowTableCreate(BaseModel):
@@ -65,6 +73,8 @@ class FlowResponse(BaseModel):
     status_reason: str | None
     write_mode: str
     upsert_key: str | None
+    extraction_config: dict | None
+    preview_mode: str
     created_at: datetime
     updated_at: datetime
 
@@ -95,6 +105,16 @@ class FlowTableListResponse(BaseModel):
     items: list[FlowTableResponse]
 
 
+def _dispatch_cleanup_jobs(tenant_schema: str | None) -> None:
+    if not tenant_schema:
+        logger.warning("Skipping cleanup job dispatch because tenant schema is not available")
+        return
+    try:
+        process_cleanup_jobs.delay(tenant_schema)
+    except Exception:
+        logger.exception("Failed to dispatch cleanup jobs for tenant schema %s", tenant_schema)
+
+
 # --- Endpoints ---
 
 @router.get("")
@@ -114,9 +134,13 @@ async def list_flows(
         limit=limit,
         offset=offset,
     )
+    total = await service.count_flows(
+        status=status_filter,
+        source_id=source_id,
+    )
     return FlowListResponse(
         items=[FlowResponse.model_validate(f) for f in flows],
-        total=len(flows),
+        total=total,
     )
 
 
@@ -139,6 +163,8 @@ async def create_flow(
             description=body.description,
             target_table_prefix=body.target_table_prefix,
             upsert_key=body.upsert_key,
+            extraction_config=body.extraction_config.model_dump(mode="json") if body.extraction_config else None,
+            preview_mode=body.preview_mode,
             created_by=actor_id,
             auto_commit=False,
         )
@@ -231,10 +257,13 @@ async def delete_flow(
             status_code=400,
             detail="Нельзя удалить поток во время выполнения. Сначала дождитесь завершения или отмените запуск.",
         )
+    cleanup_plan: list[tuple[str, str]] = []
     try:
+        if drop_target_tables:
+            cleanup_plan = await service.build_flow_cleanup_plan(flow)
         deleted = await service.delete_flow(
             flow_id,
-            drop_target_tables=drop_target_tables,
+            drop_target_tables=False,
             auto_commit=False,
         )
     except ValueError as exc:
@@ -244,6 +273,14 @@ async def delete_flow(
         await db.rollback()
         raise HTTPException(status_code=404, detail="Поток не найден")
     try:
+        if cleanup_plan:
+            await service.enqueue_cleanup_jobs(
+                cleanup_plan,
+                requested_by=actor_id,
+                related_entity_type="flow",
+                related_entity_id=flow_id,
+                auto_commit=False,
+            )
         await log_audit_event(
             db=db,
             request=request,
@@ -258,6 +295,8 @@ async def delete_flow(
     except Exception:
         await db.rollback()
         raise
+    if cleanup_plan:
+        _dispatch_cleanup_jobs(get_current_tenant_schema())
 
 
 @router.post("/{flow_id}/activate")
@@ -467,11 +506,17 @@ async def remove_flow_table(
             status_code=400,
             detail="Нельзя удалять таблицы из потока во время выполнения.",
         )
+    flow_table = next((item for item in flow.tables if item.id == table_id), None)
+    if flow_table is None:
+        raise HTTPException(status_code=404, detail="Таблица не найдена")
+    cleanup_plan: list[tuple[str, str]] = []
     try:
+        if drop_target_table:
+            cleanup_plan = await service.build_flow_table_cleanup_plan(flow, flow_table)
         removed = await service.remove_table(
             table_id,
             flow_id=flow_id,
-            drop_target_table=drop_target_table,
+            drop_target_table=False,
             auto_commit=False,
         )
     except ValueError as exc:
@@ -481,6 +526,14 @@ async def remove_flow_table(
         await db.rollback()
         raise HTTPException(status_code=404, detail="Таблица не найдена")
     try:
+        if cleanup_plan:
+            await service.enqueue_cleanup_jobs(
+                cleanup_plan,
+                requested_by=actor_id,
+                related_entity_type="flow",
+                related_entity_id=flow_id,
+                auto_commit=False,
+            )
         await log_audit_event(
             db=db,
             request=request,
@@ -495,3 +548,5 @@ async def remove_flow_table(
     except Exception:
         await db.rollback()
         raise
+    if cleanup_plan:
+        _dispatch_cleanup_jobs(get_current_tenant_schema())
