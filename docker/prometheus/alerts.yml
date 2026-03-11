@@ -1,0 +1,47 @@
+groups:
+  - name: gendwh-backend
+    rules:
+      - alert: GenDWHBackendDown
+        expr: up{job="gendwh-backend"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GenDWH backend is unreachable"
+          description: "Prometheus cannot scrape backend /metrics for more than 2 minutes."
+
+      - alert: GenDWHCleanupJobsFailed
+        expr: gendwh_cleanup_jobs_failed > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GenDWH cleanup jobs have terminal failures"
+          description: "There are failed cleanup jobs that require manual intervention."
+
+      - alert: GenDWHCleanupJobsOverdue
+        expr: gendwh_cleanup_jobs_overdue > 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GenDWH cleanup jobs are overdue"
+          description: "Pending cleanup jobs were not processed within the configured grace window."
+
+      - alert: GenDWHCleanupJobSchemaDrift
+        expr: gendwh_cleanup_jobs_missing_tables > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GenDWH tenant schema is missing cleanup tables"
+          description: "At least one active tenant schema is missing the cleanup_jobs table."
+
+      - alert: GenDWHApi5xxResponses
+        expr: increase(gendwh_errors_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "GenDWH API is returning 5xx responses"
+          description: "The backend emitted one or more 5xx responses during the last 5 minutes."
