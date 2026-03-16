@@ -5,7 +5,7 @@
 import React, { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import api, { extractItems } from "../../services/api";
+import api, { extractApiErrorMessage, extractItems } from "../../services/api";
 import { Button } from "../../components/common/Button";
 import { Modal } from "../../components/common/Modal";
 import { Preview } from "../../components/Preview/Preview";
@@ -56,7 +56,7 @@ export default function FlowDetail() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { addToast } = useToast();
-  const { showErrorToast } = useErrorToast();
+  const { showErrorToast, getErrorMessage } = useErrorToast();
   const [previewSession, setPreviewSession] = useState<string | null>(null);
   const [selectedSchema, setSelectedSchema] = useState("");
   const [selectedSourceTable, setSelectedSourceTable] = useState("");
@@ -79,7 +79,11 @@ export default function FlowDetail() {
     enabled: !!id,
   });
 
-  const { data: sourceSchemas = [] } = useQuery<string[]>({
+  const {
+    data: sourceSchemas = [],
+    isLoading: sourceSchemasLoading,
+    error: sourceSchemasError,
+  } = useQuery<string[]>({
     queryKey: ["flow-source-schemas", flow?.source_id],
     queryFn: ({ signal }) =>
       api.get(`/sources/${flow?.source_id}/schemas`, { signal }).then((r) => {
@@ -89,7 +93,11 @@ export default function FlowDetail() {
     enabled: !!flow?.source_id,
   });
 
-  const { data: sourceTables = [] } = useQuery<SourceTableData[]>({
+  const {
+    data: sourceTables = [],
+    isLoading: sourceTablesLoading,
+    error: sourceTablesError,
+  } = useQuery<SourceTableData[]>({
     queryKey: ["flow-source-tables", flow?.source_id, selectedSchema],
     queryFn: ({ signal }) =>
       api.get(`/sources/${flow?.source_id}/schemas/${selectedSchema}/tables`, { signal }).then((r) => {
@@ -226,6 +234,12 @@ export default function FlowDetail() {
   const alreadyAdded = tables.some(
     (t) => `${t.source_schema}.${t.source_table}` === selectedTableKey
   );
+  const sourceSchemasErrorMessage = sourceSchemasError
+    ? getErrorMessage(sourceSchemasError, "Не удалось получить список схем источника")
+    : "";
+  const sourceTablesErrorMessage = sourceTablesError
+    ? extractApiErrorMessage(sourceTablesError, `Не удалось получить таблицы схемы ${selectedSchema}`)
+    : "";
 
   return (
     <div>
@@ -302,7 +316,10 @@ export default function FlowDetail() {
               setSelectedSchema(e.target.value);
               setSelectedSourceTable("");
             }}
+            disabled={sourceSchemasLoading || sourceSchemas.length === 0}
           >
+            {sourceSchemasLoading && <option value="">Загрузка схем...</option>}
+            {!sourceSchemasLoading && sourceSchemas.length === 0 && <option value="">Схемы не найдены</option>}
             {sourceSchemas.map((schema) => (
               <option key={schema} value={schema}>
                 {schema}
@@ -313,8 +330,17 @@ export default function FlowDetail() {
             className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
             value={selectedSourceTable}
             onChange={(e) => setSelectedSourceTable(e.target.value)}
+            disabled={!selectedSchema || sourceTablesLoading || sourceTables.length === 0}
           >
-            <option value="">Выберите таблицу</option>
+            <option value="">
+              {!selectedSchema
+                ? "Сначала выберите схему"
+                : sourceTablesLoading
+                  ? "Загрузка таблиц..."
+                  : sourceTables.length === 0
+                    ? "Таблицы не найдены"
+                    : "Выберите таблицу"}
+            </option>
             {sourceTables.map((table) => (
               <option key={table.name} value={table.name}>
                 {table.name} ({table.row_count})
@@ -329,6 +355,22 @@ export default function FlowDetail() {
             {alreadyAdded ? "Уже добавлена" : "Добавить"}
           </Button>
         </div>
+        {sourceSchemasErrorMessage && (
+          <p className="mt-3 text-sm text-rose-600 dark:text-rose-400">{sourceSchemasErrorMessage}</p>
+        )}
+        {sourceTablesErrorMessage && (
+          <p className="mt-3 text-sm text-rose-600 dark:text-rose-400">{sourceTablesErrorMessage}</p>
+        )}
+        {sourceSchemas.length === 0 && (
+          <p className="mt-3 text-sm text-amber-600 dark:text-amber-400">
+            Для этого источника не найдено схем с доступными таблицами или объектами.
+          </p>
+        )}
+        {!!selectedSchema && !sourceTablesLoading && !sourceTablesErrorMessage && sourceTables.length === 0 && (
+          <p className="mt-3 text-sm text-slate-500 dark:text-slate-400">
+            В схеме <span className="font-medium">{selectedSchema}</span> нет доступных таблиц или файлов для добавления в поток.
+          </p>
+        )}
       </div>
 
       {/* Tables */}

@@ -183,6 +183,14 @@ Example secret fields:
 }
 ```
 
+### Recovery After Vault Recreate
+
+If local Jira connection tests suddenly start failing with correct credentials, check
+[jira-vault-recovery.md](/Users/nikitatsarev/Documents/www/gen_dwh/docs/jira-vault-recovery.md).
+
+Most often the real problem is not Jira password mismatch, but stale AppRole credentials after local dev Vault
+recreation.
+
 ## API Endpoints
 
 - `GET /api/v1/sources/{source_id}/jira/projects`

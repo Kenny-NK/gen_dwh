@@ -162,15 +162,20 @@ async def decrypt_password(session: AsyncSession, encrypted: bytes) -> str:
 async def discover_schemas(
     host: str, port: int, database: str, username: str, password: str
 ) -> list[str]:
-    """Discover available schemas in the source database."""
+    """Discover non-system schemas, prioritizing schemas that contain tables."""
     conn = await asyncpg.connect(
         host=host, port=port, database=database, user=username, password=password, timeout=10
     )
     try:
         rows = await conn.fetch(
-            "SELECT schema_name FROM information_schema.schemata "
-            "WHERE schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') "
-            "ORDER BY schema_name"
+            "SELECT s.schema_name "
+            "FROM information_schema.schemata s "
+            "LEFT JOIN information_schema.tables t "
+            "  ON t.table_schema = s.schema_name "
+            " AND t.table_type = 'BASE TABLE' "
+            "WHERE s.schema_name NOT IN ('pg_catalog', 'information_schema', 'pg_toast') "
+            "GROUP BY s.schema_name "
+            "ORDER BY COUNT(t.table_name) DESC, s.schema_name"
         )
         return [row["schema_name"] for row in rows]
     finally:
