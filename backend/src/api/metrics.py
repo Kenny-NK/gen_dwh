@@ -7,7 +7,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 from src.api.health import _check_cleanup_job_backlog
 
-router = APIRouter(tags=["metrics"])
+router = APIRouter(tags=["Observability"])
 
 _metrics: dict[str, int | float] = {
     "requests_total": 0,
@@ -94,7 +94,15 @@ def _format_metrics_lines(cleanup_metrics: dict[str, object]) -> list[str]:
     return lines
 
 
-@router.get("/metrics")
+@router.get(
+    "/metrics",
+    summary="Prometheus metrics",
+    description=(
+        "Возвращает метрики в текстовом формате Prometheus exposition. "
+        "Подходит для ручной проверки в браузере и для scrape из Prometheus."
+    ),
+    response_description="Текстовый поток метрик Prometheus",
+)
 async def get_metrics() -> Response:
     cleanup_metrics = await _collect_cleanup_job_metrics()
     lines = _format_metrics_lines(cleanup_metrics)

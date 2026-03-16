@@ -3,6 +3,9 @@ info:
   title: GenDWH Auth Contract
   version: 1.0.0
   description: |
+    LEGACY CONTRACT. Этот YAML сохранен как историческая спецификация и может расходиться с runtime API.
+    Актуальный source of truth: `backend/src/main.py` -> `/openapi.json` -> `/docs`.
+
     Authentication and authorization contract for GenDWH.
     Uses Keycloak OIDC for authentication with tenant-based isolation.
 

@@ -11,13 +11,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from src.api.deps import get_system_db
+from src.api.openapi_responses import (
+    RESPONSE_400_BAD_REQUEST,
+    RESPONSE_401_UNAUTHORIZED,
+    RESPONSE_403_FORBIDDEN,
+    RESPONSE_404_NOT_FOUND,
+    RESPONSE_422_VALIDATION,
+    merge_openapi_responses,
+)
 from src.middleware.auth import get_current_user
 from src.models.tenant import Tenant
 from src.models.user import User
 from src.models.workspace_membership import WorkspaceMembership
 from src.services.admin_service import AdminService
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+router = APIRouter(prefix="/admin", tags=["Admin"])
 
 
 def require_system_admin(current_user: dict = Depends(get_current_user)) -> dict:
@@ -36,12 +44,33 @@ class TenantCreate(BaseModel):
     keycloak_realm: str | None = Field(default=None, max_length=100)
     is_active: bool = True
 
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "name": "Acme Corp",
+                "subdomain": "acme",
+                "schema_name": "tenant_acme",
+                "keycloak_realm": "gendwh",
+                "is_active": True,
+            }
+        }
+    }
+
 
 class TenantUpdate(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=255)
     subdomain: str | None = Field(default=None, min_length=3, max_length=63)
     keycloak_realm: str | None = Field(default=None, max_length=100)
     is_active: bool | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "name": "Acme Corporation",
+                "is_active": True,
+            }
+        }
+    }
 
 
 class MembershipResponse(BaseModel):
@@ -63,7 +92,20 @@ class TenantResponse(BaseModel):
     is_active: bool
     deleted_at: datetime | None
 
-    model_config = {"from_attributes": True}
+    model_config = {
+        "from_attributes": True,
+        "json_schema_extra": {
+            "example": {
+                "id": "c767c7f5-2307-4ec9-83f5-7b194eb4d3e4",
+                "name": "Acme Corp",
+                "subdomain": "acme",
+                "schema_name": "tenant_acme",
+                "keycloak_realm": "gendwh",
+                "is_active": True,
+                "deleted_at": None,
+            }
+        },
+    }
 
 
 class UserCreate(BaseModel):
@@ -71,16 +113,44 @@ class UserCreate(BaseModel):
     email: str = Field(..., min_length=1, max_length=255)
     is_active: bool = True
 
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "keycloak_id": "0a0b0c0d-1111-2222-3333-444455556666",
+                "email": "owner@example.com",
+                "is_active": True,
+            }
+        }
+    }
+
 
 class UserUpdate(BaseModel):
     keycloak_id: str | None = Field(default=None, min_length=1, max_length=255)
     email: str | None = Field(default=None, min_length=1, max_length=255)
     is_active: bool | None = None
 
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "email": "updated.owner@example.com",
+                "is_active": True,
+            }
+        }
+    }
+
 
 class MembershipUpsert(BaseModel):
     tenant_id: UUID
     role: str = Field(..., pattern="^(owner|user|viewer)$")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "tenant_id": "c767c7f5-2307-4ec9-83f5-7b194eb4d3e4",
+                "role": "owner",
+            }
+        }
+    }
 
 
 class UserResponse(BaseModel):
@@ -138,7 +208,15 @@ def _serialize_user(user: User) -> UserResponse:
     )
 
 
-@router.get("/tenants")
+@router.get(
+    "/tenants",
+    summary="Список tenants",
+    description="Возвращает все tenants из system database.",
+    responses=merge_openapi_responses(
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+    ),
+)
 async def list_tenants(
     db: AsyncSession = Depends(get_system_db),
     _: dict = Depends(require_system_admin),
@@ -148,7 +226,18 @@ async def list_tenants(
     return TenantListResponse(items=[_serialize_tenant(tenant) for tenant in tenants])
 
 
-@router.post("/tenants", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/tenants",
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать tenant",
+    description="Создает новый tenant, его schema metadata и системную запись для дальнейшей работы.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def create_tenant(
     body: TenantCreate,
     db: AsyncSession = Depends(get_system_db),
@@ -163,7 +252,18 @@ async def create_tenant(
     return _serialize_tenant(tenant)
 
 
-@router.patch("/tenants/{tenant_id}")
+@router.patch(
+    "/tenants/{tenant_id}",
+    summary="Обновить tenant",
+    description="Изменяет display name, subdomain и административные параметры tenant.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def update_tenant(
     tenant_id: UUID,
     body: TenantUpdate,
@@ -181,7 +281,18 @@ async def update_tenant(
     return _serialize_tenant(tenant)
 
 
-@router.delete("/tenants/{tenant_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/tenants/{tenant_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить tenant",
+    description="Удаляет tenant из system scope. Используйте с осторожностью.",
+    responses=merge_openapi_responses(
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def delete_tenant(
     tenant_id: UUID,
     db: AsyncSession = Depends(get_system_db),
@@ -193,7 +304,16 @@ async def delete_tenant(
         raise HTTPException(status_code=404, detail="Tenant не найден")
 
 
-@router.get("/users")
+@router.get(
+    "/users",
+    summary="Список пользователей",
+    description="Возвращает пользователей system scope и их memberships по workspace.",
+    responses=merge_openapi_responses(
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def list_users(
     search: str | None = Query(None),
     limit: int = Query(50, ge=1, le=100),
@@ -211,7 +331,18 @@ async def list_users(
     )
 
 
-@router.post("/users", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/users",
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать пользователя",
+    description="Создает локальную запись пользователя, связанную с Keycloak subject.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def create_user(
     body: UserCreate,
     db: AsyncSession = Depends(get_system_db),
@@ -233,7 +364,18 @@ async def create_user(
     return _serialize_user(user)
 
 
-@router.patch("/users/{user_id}")
+@router.patch(
+    "/users/{user_id}",
+    summary="Обновить пользователя",
+    description="Меняет email, keycloak_id или флаг активности локального пользователя.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def update_user(
     user_id: UUID,
     body: UserUpdate,
@@ -258,7 +400,18 @@ async def update_user(
     return _serialize_user(user)
 
 
-@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/users/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить пользователя",
+    description="Удаляет пользователя из system scope.",
+    responses=merge_openapi_responses(
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def delete_user(
     user_id: UUID,
     db: AsyncSession = Depends(get_system_db),
@@ -270,7 +423,18 @@ async def delete_user(
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
 
-@router.put("/users/{user_id}/memberships")
+@router.put(
+    "/users/{user_id}/memberships",
+    summary="Назначить membership",
+    description="Создает или обновляет membership пользователя в выбранном tenant.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def upsert_membership(
     user_id: UUID,
     body: MembershipUpsert,
@@ -293,7 +457,18 @@ async def upsert_membership(
     return _serialize_user(user)
 
 
-@router.delete("/users/{user_id}/memberships/{membership_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/users/{user_id}/memberships/{membership_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить membership",
+    description="Удаляет membership пользователя из tenant.",
+    responses=merge_openapi_responses(
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def delete_membership(
     user_id: UUID,
     membership_id: UUID,

@@ -10,6 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.audit_utils import log_audit_event
 from src.api.deps import get_current_actor_id, get_tenant_db, require_permission
+from src.api.openapi_responses import (
+    RESPONSE_400_BAD_REQUEST,
+    RESPONSE_401_UNAUTHORIZED,
+    RESPONSE_403_FORBIDDEN,
+    RESPONSE_404_NOT_FOUND,
+    RESPONSE_409_CONFLICT,
+    RESPONSE_422_VALIDATION,
+    merge_openapi_responses,
+)
 from src.core.permissions import Permission
 from src.core.tenant import get_current_tenant_schema
 from src.middleware.auth import get_current_user
@@ -17,7 +26,7 @@ from src.schemas.jira import JiraExtractionConfig
 from src.services.flow_service import FlowService
 from src.tasks.cleanup import process_cleanup_jobs
 
-router = APIRouter(prefix="/flows", tags=["flows"])
+router = APIRouter(prefix="/flows", tags=["Flows"])
 logger = logging.getLogger(__name__)
 
 
@@ -34,6 +43,21 @@ class FlowCreate(BaseModel):
     extraction_config: JiraExtractionConfig | None = None
     preview_mode: str = Field(default="auto", pattern="^(auto|live|snapshot)$")
 
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "name": "ERP Orders",
+                "source_id": "bdaf4b63-d361-4d17-b8b1-cf46fdbb0c39",
+                "target_schema": "staging",
+                "description": "Ежедневная загрузка заказов",
+                "target_table_prefix": "erp",
+                "write_mode": "append",
+                "upsert_key": None,
+                "preview_mode": "auto",
+            }
+        }
+    }
+
 
 class FlowUpdate(BaseModel):
     name: str | None = None
@@ -44,6 +68,16 @@ class FlowUpdate(BaseModel):
     upsert_key: str | None = None
     preview_mode: str | None = Field(default=None, pattern="^(auto|live|snapshot)$")
 
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "description": "Ежедневная инкрементальная загрузка заказов",
+                "target_table_prefix": "erp_prod",
+                "preview_mode": "snapshot",
+            }
+        }
+    }
+
 
 class FlowTableCreate(BaseModel):
     source_schema: str = Field(..., max_length=255)
@@ -53,6 +87,19 @@ class FlowTableCreate(BaseModel):
     replication_key: str | None = None
     selected_columns: list[str] | None = None
 
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "source_schema": "public",
+                "source_table": "orders",
+                "target_table": "erp_orders",
+                "replication_method": "INCREMENTAL",
+                "replication_key": "updated_at",
+                "selected_columns": ["id", "customer_id", "status", "updated_at"],
+            }
+        }
+    }
+
 
 class FlowTableUpdate(BaseModel):
     target_table: str | None = None
@@ -60,6 +107,19 @@ class FlowTableUpdate(BaseModel):
     replication_key: str | None = None
     selected_columns: list[str] | None = None
     sensitive_columns: dict[str, str] | None = None
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "replication_method": "INCREMENTAL",
+                "replication_key": "updated_at",
+                "sensitive_columns": {
+                    "email": "email",
+                    "phone": "phone_number",
+                },
+            }
+        }
+    }
 
 
 class FlowResponse(BaseModel):
@@ -117,7 +177,17 @@ def _dispatch_cleanup_jobs(tenant_schema: str | None) -> None:
 
 # --- Endpoints ---
 
-@router.get("")
+@router.get(
+    "",
+    summary="Список потоков",
+    description="Возвращает список потоков в активном workspace с фильтрацией по статусу и источнику.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def list_flows(
     status_filter: str | None = Query(None, alias="status"),
     source_id: UUID | None = None,
@@ -144,7 +214,22 @@ async def list_flows(
     )
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    status_code=status.HTTP_201_CREATED,
+    summary="Создать поток",
+    description=(
+        "Создает поток в статусе `draft`. После создания обычно нужно добавить таблицы и затем "
+        "активировать поток отдельным endpoint'ом."
+    ),
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def create_flow(
     body: FlowCreate,
     request: Request,
@@ -188,7 +273,18 @@ async def create_flow(
     return FlowResponse.model_validate(flow)
 
 
-@router.get("/{flow_id}")
+@router.get(
+    "/{flow_id}",
+    summary="Получить поток",
+    description="Возвращает основную конфигурацию одного потока по UUID.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def get_flow(
     flow_id: UUID,
     db: AsyncSession = Depends(get_tenant_db),
@@ -202,7 +298,18 @@ async def get_flow(
     return FlowResponse.model_validate(flow)
 
 
-@router.patch("/{flow_id}")
+@router.patch(
+    "/{flow_id}",
+    summary="Обновить поток",
+    description="Изменяет конфигурацию потока без запуска и без изменения набора таблиц.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def update_flow(
     flow_id: UUID,
     body: FlowUpdate,
@@ -238,7 +345,22 @@ async def update_flow(
     return FlowResponse.model_validate(flow)
 
 
-@router.delete("/{flow_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{flow_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить поток",
+    description=(
+        "Удаляет поток. При `drop_target_tables=true` backend дополнительно планирует очистку "
+        "целевых таблиц в business database."
+    ),
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def delete_flow(
     flow_id: UUID,
     request: Request,
@@ -299,7 +421,18 @@ async def delete_flow(
         _dispatch_cleanup_jobs(get_current_tenant_schema())
 
 
-@router.post("/{flow_id}/activate")
+@router.post(
+    "/{flow_id}/activate",
+    summary="Активировать поток",
+    description="Переводит поток из `draft` в рабочее состояние `paused`, после чего его можно запускать вручную или по расписанию.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def activate_flow(
     flow_id: UUID,
     request: Request,
@@ -340,7 +473,18 @@ async def activate_flow(
     return FlowResponse.model_validate(updated)
 
 
-@router.post("/{flow_id}/pause")
+@router.post(
+    "/{flow_id}/pause",
+    summary="Поставить поток на паузу",
+    description="Если поток выполняется, пауза будет применена после завершения текущего запуска.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def pause_flow(
     flow_id: UUID,
     request: Request,
@@ -387,7 +531,18 @@ async def pause_flow(
 
 # --- Flow Tables ---
 
-@router.get("/{flow_id}/tables")
+@router.get(
+    "/{flow_id}/tables",
+    summary="Список таблиц потока",
+    description="Возвращает список table mappings, входящих в поток.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def list_flow_tables(
     flow_id: UUID,
     db: AsyncSession = Depends(get_tenant_db),
@@ -401,7 +556,23 @@ async def list_flow_tables(
     return FlowTableListResponse(items=[FlowTableResponse.model_validate(t) for t in flow.tables])
 
 
-@router.post("/{flow_id}/tables", status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/{flow_id}/tables",
+    status_code=status.HTTP_201_CREATED,
+    summary="Добавить таблицу в поток",
+    description=(
+        "Добавляет source table или object в поток. Для Jira и S3 `source_table` может быть именем "
+        "stream'а или object key, а `target_table` будет нормализован backend'ом."
+    ),
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_409_CONFLICT,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def add_flow_table(
     flow_id: UUID,
     body: FlowTableCreate,
@@ -449,7 +620,18 @@ async def add_flow_table(
     return FlowTableResponse.model_validate(table)
 
 
-@router.patch("/{flow_id}/tables/{table_id}")
+@router.patch(
+    "/{flow_id}/tables/{table_id}",
+    summary="Обновить таблицу в потоке",
+    description="Изменяет replication strategy, target table и правила маскирования чувствительных полей.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def update_flow_table(
     flow_id: UUID,
     table_id: UUID,
@@ -486,7 +668,19 @@ async def update_flow_table(
     return FlowTableResponse.model_validate(table)
 
 
-@router.delete("/{flow_id}/tables/{table_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete(
+    "/{flow_id}/tables/{table_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Удалить таблицу из потока",
+    description="Удаляет table mapping из потока. При необходимости может инициировать очистку целевой таблицы.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def remove_flow_table(
     flow_id: UUID,
     table_id: UUID,

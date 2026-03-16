@@ -7,6 +7,12 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.api.health import router as health_router
 from src.api.metrics import MetricsMiddleware, router as metrics_router
+from src.api.openapi import (
+    OPENAPI_DESCRIPTION,
+    OPENAPI_SERVERS,
+    OPENAPI_TAGS,
+    SWAGGER_UI_PARAMETERS,
+)
 from src.api.router import api_router
 from src.core.config import settings
 from src.core.redis import redis_client
@@ -30,11 +36,14 @@ async def lifespan(_: FastAPI):
 
 app = FastAPI(
     title="GenDWH API",
-    description="Data Pipeline MVP - PostgreSQL to PostgreSQL via Meltano",
+    description=OPENAPI_DESCRIPTION,
     version="0.1.0",
     docs_url="/docs",
     redoc_url="/redoc",
     lifespan=lifespan,
+    openapi_tags=OPENAPI_TAGS,
+    servers=OPENAPI_SERVERS,
+    swagger_ui_parameters=SWAGGER_UI_PARAMETERS,
 )
 
 app.add_middleware(RateLimitMiddleware)

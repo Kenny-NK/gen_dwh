@@ -3,7 +3,7 @@
 from uuid import UUID
 
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
 
 from src.core.config import settings
 from src.core.security import (
@@ -18,16 +18,27 @@ from src.core.workspace_auth import (
     load_auth_context_from_session,
 )
 
-security = HTTPBearer(auto_error=False)
+security = HTTPBearer(
+    auto_error=False,
+    scheme_name="BearerAuth",
+    description="Keycloak access token. Используется для bootstrap backend session и как fallback auth.",
+)
+session_cookie_security = APIKeyCookie(
+    name=settings.auth_cookie_name,
+    auto_error=False,
+    scheme_name="SessionCookieAuth",
+    description="HTTP-only backend session cookie, устанавливается через POST /api/v1/auth/session.",
+)
 
 
 async def get_current_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    session_cookie: str | None = Depends(session_cookie_security),
 ) -> dict:
     """Extract and validate auth context from bearer token or app session cookie."""
     bearer_token = credentials.credentials if credentials else None
-    session_token = request.cookies.get(settings.auth_cookie_name)
+    session_token = session_cookie or request.cookies.get(settings.auth_cookie_name)
     if not bearer_token and not session_token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

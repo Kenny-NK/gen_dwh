@@ -2,7 +2,11 @@ openapi: 3.0.3
 info:
   title: GenDWH Schedules API
   version: 1.0.0
-  description: Schedule configuration endpoints
+  description: |
+    LEGACY CONTRACT. Этот YAML сохранен как историческая спецификация и может расходиться с runtime API.
+    Актуальный source of truth: `backend/src/main.py` -> `/openapi.json` -> `/docs`.
+
+    Schedule configuration endpoints
 
 servers:
   - url: /api/v1

@@ -3,13 +3,23 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel
 from sqlalchemy import update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.api.audit_utils import log_audit_event
 from src.api.deps import get_current_actor_id, get_tenant_db, require_permission
+from src.api.openapi_responses import (
+    RESPONSE_400_BAD_REQUEST,
+    RESPONSE_401_UNAUTHORIZED,
+    RESPONSE_403_FORBIDDEN,
+    RESPONSE_404_NOT_FOUND,
+    RESPONSE_409_CONFLICT,
+    RESPONSE_422_VALIDATION,
+    RESPONSE_503_UNAVAILABLE,
+    merge_openapi_responses,
+)
 from src.core.permissions import Permission
 from src.core.tenant import get_current_tenant_schema
 from src.middleware.auth import get_current_user
@@ -18,7 +28,7 @@ from src.services.flow_service import FlowService
 from src.services.run_service import RunService
 from src.services.scheduler import execute_flow_run
 
-router = APIRouter(tags=["runs"])
+router = APIRouter(tags=["Runs"])
 
 
 class RunResponse(BaseModel):
@@ -38,7 +48,28 @@ class RunResponse(BaseModel):
     retry_count: int
     created_at: datetime
 
-    model_config = {"from_attributes": True}
+    model_config = {
+        "from_attributes": True,
+        "json_schema_extra": {
+            "example": {
+                "id": "0d0d6d7d-478f-4b3d-b02d-c90f25232a4e",
+                "flow_id": "85caa7da-bde8-4b7c-a3d5-a90501c8a273",
+                "run_number": 14,
+                "triggered_by": "manual",
+                "status": "running",
+                "started_at": "2026-03-12T09:10:00Z",
+                "completed_at": None,
+                "tables_processed": 1,
+                "records_processed": 3250,
+                "source_records_total": 12000,
+                "source_records_total_is_estimate": True,
+                "records_failed": 0,
+                "error_message": None,
+                "retry_count": 0,
+                "created_at": "2026-03-12T09:09:58Z",
+            }
+        },
+    }
 
 
 class RunListResponse(BaseModel):
@@ -73,12 +104,48 @@ async def _set_run_dispatch_state(
     await db.commit()
 
 
-@router.get("/flows/{flow_id}/runs")
+@router.get(
+    "/flows/{flow_id}/runs",
+    summary="Список запусков потока",
+    description="Возвращает историю запусков конкретного потока с пагинацией и фильтром по статусу.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def list_flow_runs(
-    flow_id: UUID,
-    status_filter: str | None = Query(None, alias="status"),
-    limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    flow_id: UUID = Path(
+        ...,
+        description="UUID потока, для которого нужно вернуть историю запусков.",
+        openapi_examples={
+            "orders_flow": {
+                "summary": "Flow для ERP-заказов",
+                "value": "85caa7da-bde8-4b7c-a3d5-a90501c8a273",
+            }
+        },
+    ),
+    status_filter: str | None = Query(
+        None,
+        alias="status",
+        description="Фильтр по статусу запуска: `queued`, `running`, `completed`, `failed`, `cancelled`.",
+        openapi_examples={"failed": {"summary": "Только ошибки", "value": "failed"}},
+    ),
+    limit: int = Query(
+        50,
+        ge=1,
+        le=100,
+        description="Количество запусков на страницу.",
+        openapi_examples={"page_size": {"summary": "50 запусков", "value": 50}},
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="Смещение для пагинации по истории запусков.",
+        openapi_examples={"second_page": {"summary": "Вторая страница", "value": 50}},
+    ),
     db: AsyncSession = Depends(get_tenant_db),
     _: None = Depends(require_permission(Permission.FLOWS_READ)),
     current_user: dict = Depends(get_current_user),
@@ -97,10 +164,36 @@ async def list_flow_runs(
     )
 
 
-@router.post("/flows/{flow_id}/runs", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/flows/{flow_id}/runs",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Запустить поток вручную",
+    description=(
+        "Создает новый run и отправляет задачу в Celery. Перед запуском backend проверяет, "
+        "что поток активирован, источник доступен и нет другого активного запуска."
+    ),
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_409_CONFLICT,
+        RESPONSE_422_VALIDATION,
+        RESPONSE_503_UNAVAILABLE,
+    ),
+)
 async def trigger_run(
-    flow_id: UUID,
     request: Request,
+    flow_id: UUID = Path(
+        ...,
+        description="UUID потока, который нужно запустить вручную.",
+        openapi_examples={
+            "orders_flow": {
+                "summary": "Flow для ERP-заказов",
+                "value": "85caa7da-bde8-4b7c-a3d5-a90501c8a273",
+            }
+        },
+    ),
     db: AsyncSession = Depends(get_tenant_db),
     actor_id: UUID | None = Depends(get_current_actor_id),
     _: None = Depends(require_permission(Permission.FLOWS_RUN)),
@@ -172,10 +265,39 @@ async def trigger_run(
     return RunResponse.model_validate(run)
 
 
-@router.get("/flows/{flow_id}/runs/{run_id}")
+@router.get(
+    "/flows/{flow_id}/runs/{run_id}",
+    summary="Получить запуск потока",
+    description="Возвращает детали одного запуска в рамках конкретного flow.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def get_run(
-    flow_id: UUID,
-    run_id: UUID,
+    flow_id: UUID = Path(
+        ...,
+        description="UUID потока, которому принадлежит run.",
+        openapi_examples={
+            "orders_flow": {
+                "summary": "Flow для ERP-заказов",
+                "value": "85caa7da-bde8-4b7c-a3d5-a90501c8a273",
+            }
+        },
+    ),
+    run_id: UUID = Path(
+        ...,
+        description="UUID конкретного запуска потока.",
+        openapi_examples={
+            "manual_run": {
+                "summary": "Ручной запуск",
+                "value": "0d0d6d7d-478f-4b3d-b02d-c90f25232a4e",
+            }
+        },
+    ),
     db: AsyncSession = Depends(get_tenant_db),
     _: None = Depends(require_permission(Permission.FLOWS_READ)),
     current_user: dict = Depends(get_current_user),
@@ -187,11 +309,40 @@ async def get_run(
     return RunResponse.model_validate(run)
 
 
-@router.post("/flows/{flow_id}/runs/{run_id}/cancel")
+@router.post(
+    "/flows/{flow_id}/runs/{run_id}/cancel",
+    summary="Отменить запуск",
+    description="Отправляет revoke в Celery и помечает run как `cancelled`, если он еще активен.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def cancel_run(
-    flow_id: UUID,
-    run_id: UUID,
     request: Request,
+    flow_id: UUID = Path(
+        ...,
+        description="UUID потока, которому принадлежит отменяемый run.",
+        openapi_examples={
+            "orders_flow": {
+                "summary": "Flow для ERP-заказов",
+                "value": "85caa7da-bde8-4b7c-a3d5-a90501c8a273",
+            }
+        },
+    ),
+    run_id: UUID = Path(
+        ...,
+        description="UUID активного запуска, который нужно отменить.",
+        openapi_examples={
+            "active_run": {
+                "summary": "Активный запуск",
+                "value": "0d0d6d7d-478f-4b3d-b02d-c90f25232a4e",
+            }
+        },
+    ),
     db: AsyncSession = Depends(get_tenant_db),
     actor_id: UUID | None = Depends(get_current_actor_id),
     _: None = Depends(require_permission(Permission.FLOWS_RUN)),
@@ -222,11 +373,43 @@ async def cancel_run(
     return RunResponse.model_validate(run)
 
 
-@router.post("/flows/{flow_id}/runs/{run_id}/retry", status_code=status.HTTP_202_ACCEPTED)
+@router.post(
+    "/flows/{flow_id}/runs/{run_id}/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Повторить неуспешный запуск",
+    description="Создает новый run с `triggered_by=retry` для запуска, завершившегося со статусом `failed`.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_409_CONFLICT,
+        RESPONSE_422_VALIDATION,
+        RESPONSE_503_UNAVAILABLE,
+    ),
+)
 async def retry_run(
-    flow_id: UUID,
-    run_id: UUID,
     request: Request,
+    flow_id: UUID = Path(
+        ...,
+        description="UUID потока, для которого нужно повторить неуспешный run.",
+        openapi_examples={
+            "orders_flow": {
+                "summary": "Flow для ERP-заказов",
+                "value": "85caa7da-bde8-4b7c-a3d5-a90501c8a273",
+            }
+        },
+    ),
+    run_id: UUID = Path(
+        ...,
+        description="UUID запуска со статусом `failed`, который будет использоваться как источник retry.",
+        openapi_examples={
+            "failed_run": {
+                "summary": "Упавший запуск",
+                "value": "0d0d6d7d-478f-4b3d-b02d-c90f25232a4e",
+            }
+        },
+    ),
     db: AsyncSession = Depends(get_tenant_db),
     actor_id: UUID | None = Depends(get_current_actor_id),
     _: None = Depends(require_permission(Permission.FLOWS_RUN)),
@@ -300,9 +483,29 @@ async def retry_run(
     return RunResponse.model_validate(run)
 
 
-@router.get("/runs/{run_id}")
+@router.get(
+    "/runs/{run_id}",
+    summary="Получить запуск по UUID",
+    description="Удобный shortcut endpoint для просмотра run без явного указания flow_id.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_404_NOT_FOUND,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def get_run_by_id(
-    run_id: UUID,
+    run_id: UUID = Path(
+        ...,
+        description="UUID запуска, который нужно получить без указания `flow_id`.",
+        openapi_examples={
+            "manual_run": {
+                "summary": "Ручной запуск",
+                "value": "0d0d6d7d-478f-4b3d-b02d-c90f25232a4e",
+            }
+        },
+    ),
     db: AsyncSession = Depends(get_tenant_db),
     _: None = Depends(require_permission(Permission.FLOWS_READ)),
     current_user: dict = Depends(get_current_user),
@@ -314,11 +517,37 @@ async def get_run_by_id(
     return RunResponse.model_validate(run)
 
 
-@router.get("/runs")
+@router.get(
+    "/runs",
+    summary="Список всех запусков workspace",
+    description="Возвращает историю запусков по всем потокам активного workspace.",
+    responses=merge_openapi_responses(
+        RESPONSE_400_BAD_REQUEST,
+        RESPONSE_401_UNAUTHORIZED,
+        RESPONSE_403_FORBIDDEN,
+        RESPONSE_422_VALIDATION,
+    ),
+)
 async def list_all_runs(
-    status_filter: str | None = Query(None, alias="status"),
-    limit: int = Query(50, ge=1, le=100),
-    offset: int = Query(0, ge=0),
+    status_filter: str | None = Query(
+        None,
+        alias="status",
+        description="Фильтр по статусу запуска по всем потокам workspace.",
+        openapi_examples={"running": {"summary": "Только активные запуски", "value": "running"}},
+    ),
+    limit: int = Query(
+        50,
+        ge=1,
+        le=100,
+        description="Количество элементов на страницу.",
+        openapi_examples={"page_size": {"summary": "50 запусков", "value": 50}},
+    ),
+    offset: int = Query(
+        0,
+        ge=0,
+        description="Смещение для пагинации по списку запусков workspace.",
+        openapi_examples={"second_page": {"summary": "Вторая страница", "value": 50}},
+    ),
     db: AsyncSession = Depends(get_tenant_db),
     _: None = Depends(require_permission(Permission.FLOWS_READ)),
     current_user: dict = Depends(get_current_user),

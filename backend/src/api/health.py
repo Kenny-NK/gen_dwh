@@ -5,17 +5,63 @@ import logging
 import shutil
 
 from fastapi import APIRouter, status
+from pydantic import BaseModel
 from fastapi.responses import JSONResponse
 from sqlalchemy import select, text
 
+from src.api.openapi_responses import RESPONSE_503_UNAVAILABLE, merge_openapi_responses
 from src.core.redis import redis_client
 from src.core.tenant import validate_schema_name
 from src.models.base import SystemSessionLocal
 from src.models.tenant import Tenant
 
-router = APIRouter(tags=["health"])
+router = APIRouter(tags=["Observability"])
 logger = logging.getLogger(__name__)
 _CLEANUP_JOB_OVERDUE_GRACE = timedelta(minutes=15)
+
+
+class CleanupJobsHealthResponse(BaseModel):
+    status: str
+    failed_jobs: int | None = None
+    overdue_jobs: int | None = None
+    missing_tables: int | None = None
+    affected_tenants: list[str] | None = None
+    overdue_grace_seconds: int | None = None
+    error: str | None = None
+
+
+class BackgroundTasksHealthResponse(BaseModel):
+    cleanup_jobs: CleanupJobsHealthResponse
+
+
+class HealthCheckResponse(BaseModel):
+    status: str
+    database: str
+    redis: str
+    meltano: str
+    background_tasks: BackgroundTasksHealthResponse
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "status": "healthy",
+                "database": "ok",
+                "redis": "ok",
+                "meltano": "ok",
+                "background_tasks": {
+                    "cleanup_jobs": {
+                        "status": "healthy",
+                        "failed_jobs": 0,
+                        "overdue_jobs": 0,
+                        "missing_tables": 0,
+                        "affected_tenants": [],
+                        "overdue_grace_seconds": 900,
+                        "error": None,
+                    }
+                },
+            }
+        }
+    }
 
 
 async def _active_tenant_schemas() -> list[str]:
@@ -84,7 +130,16 @@ async def _check_cleanup_job_backlog() -> dict[str, object]:
     }
 
 
-@router.get("/health")
+@router.get(
+    "/health",
+    response_model=HealthCheckResponse,
+    summary="Проверка готовности сервиса",
+    description=(
+        "Проверяет доступность system database, Redis, Meltano и состояние backlog cleanup jobs. "
+        "Используйте этот endpoint для readiness/liveness проверок и оперативной диагностики."
+    ),
+    responses=merge_openapi_responses(RESPONSE_503_UNAVAILABLE),
+)
 async def health_check() -> JSONResponse:
     """Check readiness of core dependencies and surface operational degradation."""
     checks: dict[str, object] = {"status": "healthy"}
